@@ -1,5 +1,5 @@
 import ComplianceNotice from './models/ComplianceNotice.js';
-import { sendSMS } from './sms.js';
+import { sendSMS } from './services/sms.js';
 import { COMPLIANCE_LABELS, interpolate } from './report-labels.js';
 import { formatKesAmount } from './report.js';
 import { normalizeReportLanguage } from './languages.js';

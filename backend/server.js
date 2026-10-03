@@ -21,7 +21,7 @@ import { evaluateCompliance } from './compliance-rules.js';
 import { dispatchComplianceNotices, phraseCompliance } from './compliance-notices.js';
 import ComplianceNotice from './models/ComplianceNotice.js';
 import { triggerSTKPush } from './payments.js';
-import { sendSMS } from './sms.js';
+import { sendSMS } from './services/sms.js';
 import { runCreditReminders } from './credit-reminders.js';
 import { cancelLastLogged, detectCancelCommand } from './cancel-entry.js';
 import {
@@ -474,7 +474,7 @@ app.post('/api/webhooks/payhero', async (req, res) => {
 app.post('/api/webhooks/tiara-delivery', (req, res) => {
   console.log("[TIARA DELIVERY_REPORT]", JSON.stringify(req.body, null, 2));
   // Once you see the real payload shape here, match req.body.refId
-  // against the refId returned by sendSMS() to track per-message status.
+  // against the msgId returned by sendSMS() to track per-message status.
   res.status(200).json({ received: true });
 });
 
