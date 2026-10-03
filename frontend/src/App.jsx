@@ -7,12 +7,14 @@ import {
   enqueueVoiceEntry,
   retryOutboxItem,
 } from './lib/outbox.js';
-import { formatKsh, timeAgo } from './lib/format.js';
+import { formatKsh, formatPercent, timeAgo } from './lib/format.js';
 import { useOfflineSync } from './hooks/useOfflineSync.js';
 import ConnectionBar from './components/ConnectionBar.jsx';
 import PendingEntries from './components/PendingEntries.jsx';
 import InstallPrompt from './components/InstallPrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
+import StockPanel from './components/StockPanel.jsx';
+import SettingsPanel from './components/SettingsPanel.jsx';
 
 // The service worker replays the last good API response when the network is
 // gone, and stamps it so the UI can say "this is a saved copy" instead of
@@ -22,7 +24,7 @@ const servedFromCache = (response) => response.headers.get('X-Biashara-From-Cach
 // Home-screen shortcuts in the manifest deep-link with ?tab=...
 const initialTab = () => {
   const tab = new URLSearchParams(window.location.search).get('tab');
-  return ['ledger', 'report', 'admin'].includes(tab) ? tab : 'ledger';
+  return ['ledger', 'stock', 'report', 'settings', 'admin'].includes(tab) ? tab : 'ledger';
 };
 
 // SVG Icons
@@ -117,6 +119,7 @@ export default function App() {
 
   // Weekly Report State
   const [report, setReport] = useState(null);
+  const [reportLabels, setReportLabels] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [smsStatus, setSmsStatus] = useState(null);
 
@@ -172,6 +175,7 @@ export default function App() {
 
       const data = await response.json();
       setReport(data.report);
+      setReportLabels(data.labels || null);
 
       if (servedFromCache(response)) {
         // A replayed response means no SMS went out just now — saying it did
@@ -224,12 +228,24 @@ export default function App() {
     },
   });
 
+  const persistBusiness = (next) => {
+    localStorage.setItem('biashara_business', JSON.stringify(next));
+    setBusiness(next);
+  };
+
   // Trigger data load on mount or business change
   useEffect(() => {
     if (business) {
       fetchEntries();
+      fetch(`${API_BASE}/business/${business.id}`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((fresh) => {
+          if (!fresh) return;
+          persistBusiness({ ...business, ...fresh });
+        })
+        .catch(() => {});
     }
-  }, [business]);
+  }, [business?.id]);
 
   // Handle active tab change
   useEffect(() => {
@@ -761,10 +777,22 @@ export default function App() {
           Daily Ledger
         </button>
         <button
+          className={`nav-tab ${activeTab === 'stock' ? 'active' : ''}`}
+          onClick={() => setActiveTab('stock')}
+        >
+          Stock
+        </button>
+        <button
           className={`nav-tab ${activeTab === 'report' ? 'active' : ''}`}
           onClick={() => setActiveTab('report')}
         >
           Weekly till slip
+        </button>
+        <button
+          className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
+          onClick={() => setActiveTab('settings')}
+        >
+          Settings
         </button>
         <button
           className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
@@ -781,6 +809,16 @@ export default function App() {
         {activeTab === 'ledger' && (
           <>
             <InstallPrompt />
+
+            {(!business.county || business.kraPin === 'unknown' || !business.kraPin) && (
+              <button
+                type="button"
+                className="offline-capture-note compliance-banner"
+                onClick={() => setActiveTab('settings')}
+              >
+                Finish your shop profile to see the tax and permit deadlines that apply to you.
+              </button>
+            )}
 
             {/* Today's Summary Metrics */}
             <div className="metrics-grid">
@@ -880,6 +918,26 @@ export default function App() {
           </>
         )}
 
+        {activeTab === 'stock' && (
+          <StockPanel
+            business={business}
+            online={online}
+            onSaved={fetchEntries}
+            onError={setError}
+            onSuccess={setSuccess}
+          />
+        )}
+
+        {activeTab === 'settings' && (
+          <SettingsPanel
+            business={business}
+            online={online}
+            onBusinessChange={persistBusiness}
+            onError={setError}
+            onSuccess={setSuccess}
+          />
+        )}
+
         {activeTab === 'report' && (
           /* Weekly receipt till slip view (SMS sent automatically on render) */
           <div className="receipt-wrapper">
@@ -904,27 +962,29 @@ export default function App() {
 
                 <div className="receipt-card">
                   <div className="receipt-title">BiasharaGPT</div>
-                  <div className="receipt-subtitle">{business.name.toUpperCase()} WEEKLY REPORT</div>
+                  <div className="receipt-subtitle">
+                    {business.name.toUpperCase()} {reportLabels?.weeklySubtitle || 'WEEKLY REPORT'}
+                  </div>
 
                   <div className="receipt-divider" />
 
                   <div className="receipt-row">
-                    <span className="label">REVENUE</span>
+                    <span className="label">{reportLabels?.revenue || 'REVENUE'}</span>
                     <span className="value mono">KSh {report.revenue.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">COST OF GOODS (PURCHASES)</span>
+                    <span className="label">{reportLabels?.costOfGoods || 'COST OF GOODS (PURCHASES)'}</span>
                     <span className="value mono">KSh {report.cost_of_goods.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">OTHER EXPENSES</span>
+                    <span className="label">{reportLabels?.otherExpenses || 'OTHER EXPENSES'}</span>
                     <span className="value mono">KSh {report.other_expenses.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">M-PESA CHARGES (PAYHERO)</span>
+                    <span className="label">{reportLabels?.mpesaFees || 'M-PESA CHARGES (PAYHERO)'}</span>
                     <span className="value mono">KSh {report.mpesa_fees.toFixed(2)}</span>
                   </div>
 
@@ -935,22 +995,76 @@ export default function App() {
                       report.net_profit >= 0 ? 'positive' : 'negative'
                     }`}
                   >
-                    <span className="label">NET PROFIT</span>
+                    <span className="label">{reportLabels?.netProfit || 'NET PROFIT'}</span>
                     <span className="value mono">KSh {report.net_profit.toFixed(2)}</span>
                   </div>
 
                   <div className="dotted-rule" />
 
+                  <div className="receipt-section-title">{reportLabels?.grossProfitByItem || 'GROSS PROFIT BY ITEM'}</div>
+                  <p className="receipt-section-note">
+                    {reportLabels?.grossNote ||
+                      'Cost of goods sold uses the unit cost you recorded on Stock. Net profit above is still cash in minus cash out.'}
+                  </p>
+
+                  {Array.isArray(report.item_profits) && report.item_profits.length > 0 ? (
+                    report.item_profits.map((row) => (
+                      <div className="receipt-item-profit" key={row.item}>
+                        <div className="receipt-row">
+                          <span className="label">{row.item.toUpperCase()}</span>
+                          <span className="value mono">
+                            {row.cost_unknown
+                              ? (reportLabels?.noCostYet || 'NO COST YET')
+                              : `KSh ${Number(row.gross_profit).toFixed(2)}`}
+                          </span>
+                        </div>
+                        <div className="receipt-item-meta">
+                          {row.qty_sold} {reportLabels?.sold || 'sold'} · {reportLabels?.rev || 'rev'} {formatKsh(row.revenue)}
+                          {row.cost_unknown
+                            ? ` · ${reportLabels?.addStockForMargin || 'add stock to see margin'}`
+                            : ` · ${reportLabels?.cost || 'cost'} ${formatKsh(row.cogs)} · ${formatPercent(row.margin)}`}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="receipt-item-meta" style={{ marginBottom: '10px' }}>
+                      {reportLabels?.noSales || 'No sales this week yet.'}
+                    </div>
+                  )}
+
+                  {report.items_missing_cost > 0 && (
+                    <div className="receipt-item-meta" style={{ marginBottom: '8px' }}>
+                      {(reportLabels?.itemsMissingCost || '{count} sold item(s) have no stock cost yet').replace(
+                        '{count}',
+                        String(report.items_missing_cost)
+                      )}
+                    </div>
+                  )}
+
+                  <div
+                    className={`receipt-row total-row ${
+                      Number(report.gross_profit || 0) >= 0 ? 'positive' : 'negative'
+                    }`}
+                  >
+                    <span className="label">{reportLabels?.grossProfit || 'GROSS PROFIT'}</span>
+                    <span className="value mono">
+                      KSh {Number(report.gross_profit || 0).toFixed(2)}
+                      {Number.isFinite(report.gross_margin) ? ` (${formatPercent(report.gross_margin)})` : ''}
+                    </span>
+                  </div>
+
+                  <div className="dotted-rule" />
+
                   <div className="receipt-row">
-                    <span className="label">OUTSTANDING CREDIT</span>
+                    <span className="label">{reportLabels?.outstandingCredit || 'OUTSTANDING CREDIT'}</span>
                     <span className="value mono" style={{ color: '#8E44AD' }}>
                       KSh {report.outstanding_credit.toFixed(2)}
                     </span>
                   </div>
 
                   <div className="receipt-footer-text">
-                    Printed at {new Date().toLocaleDateString()}<br />
-                    Powered by BiasharaGPT
+                    {reportLabels?.printedAt || 'Printed at'} {new Date().toLocaleDateString()}<br />
+                    {reportLabels?.poweredBy || 'Powered by BiasharaGPT'}
                   </div>
                 </div>
               </>
