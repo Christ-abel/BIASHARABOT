@@ -370,16 +370,7 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
         )}
 
         <div className={`stock-dropzone ${parsing ? 'is-busy' : ''}`}>
-          <span className="stock-dropzone-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
-          </span>
-          <strong>{parsing ? 'Reading receipt…' : 'Photograph the supplier slip'}</strong>
-          <span>
-            On a laptop this uses the webcam (allow camera when asked). On a phone it opens the rear camera. Or pick a photo you already took.
-          </span>
+          <strong>{parsing ? 'Reading receipt…' : 'Add a receipt'}</strong>
           <div className="stock-upload-actions">
             <button
               type="button"
@@ -387,7 +378,7 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
               disabled={parsing || saving || !online}
               onClick={onTakePhoto}
             >
-              Take photo
+              Option A · Take photo
             </button>
             <button
               type="button"
@@ -395,9 +386,12 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
               disabled={parsing || saving || !online}
               onClick={() => fileInputRef.current?.click()}
             >
-              Choose file
+              Option B · Choose file
             </button>
           </div>
+          <span>
+            A opens the camera. B opens your files (photo or PDF).
+          </span>
           <input
             ref={cameraInputRef}
             type="file"

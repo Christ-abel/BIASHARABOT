@@ -27,6 +27,17 @@ import {
   saveEntryIdempotently
 } from './offline-sync.js';
 import bcrypt from 'bcryptjs';
+import {
+  issueSession,
+  looksLikeEmail,
+  normalizeEmail,
+  normalizePhone,
+  rateLimit,
+  requireOwnBusiness,
+  revokeSession,
+  validatePassword,
+  verifyBusinessPassword
+} from './auth.js';
 
 dotenv.config();
 
@@ -112,7 +123,6 @@ if (!mongoURI) {
       console.log("Ensure your IP address is whitelisted in MongoDB Atlas and the credentials in MONGODB_URI are correct.");
     });
 }
-
 // 1. Text Entry Endpoint
 app.post('/api/entries/text', async (req, res) => {
   try {
@@ -475,28 +485,33 @@ app.post('/api/admin/verify', async (req, res) => {
     if (!businessId) {
       return res.status(400).json({ error: "Business ID is required for verification" });
     }
+    if (!rateLimit(`admin:${req.ip}:${businessId}`)) {
+      return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+    }
 
     const biz = await Business.findOne({ id: businessId });
-    if (!biz) {
-      return res.status(404).json({ error: "Business profile not found" });
-    }
-
-    const match = await bcrypt.compare(password, biz.password);
-    if (match) {
+    const match = await verifyBusinessPassword(biz, password);
+    if (match && biz) {
       return res.json({ success: true });
-    } else {
-      return res.status(401).json({ error: "Invalid admin password" });
     }
+    return res.status(401).json({ error: "Invalid admin password" });
   } catch (error) {
     console.error("Admin verification error:", error);
     res.status(500).json({ error: "Server error during verification" });
   }
 });
 
+function withSession(business) {
+  return { ...toPublicBusiness(business), token: issueSession(business.id) };
+}
+
 // 8. Sign Up Business Endpoint
 app.post('/api/business', async (req, res) => {
   try {
     const { name, phone, email, password, confirmPassword, tillNumber, reportLanguage } = req.body;
+    if (!rateLimit(`signup:${req.ip}`, { max: 8 })) {
+      return res.status(429).json({ error: 'Too many sign-ups from this network. Try again shortly.' });
+    }
     if (!name || !phone || !email || !password || !confirmPassword) {
       return res.status(400).json({ error: "All fields are required" });
     }
@@ -505,11 +520,32 @@ app.post('/api/business', async (req, res) => {
       return res.status(400).json({ error: "Passwords do not match" });
     }
 
+    try {
+      validatePassword(password);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    const cleanEmail = normalizeEmail(email);
+    const cleanPhone = normalizePhone(phone);
+    if (!looksLikeEmail(cleanEmail)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
+    if (!/^2547\d{8}$/.test(cleanPhone) && !/^2541\d{8}$/.test(cleanPhone)) {
+      return res.status(400).json({ error: 'Enter a valid Kenyan mobile number' });
+    }
+
     if (reportLanguage && !isSupportedReportLanguage(reportLanguage)) {
       return res.status(400).json({ error: 'Unsupported report language', allowed: REPORT_LANGUAGES });
     }
 
-    let id = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const taken = await Business.findOne({ $or: [{ email: cleanEmail }, { phone: cleanPhone }] });
+    if (taken) {
+      return res.status(409).json({ error: 'An account with that phone or email already exists. Log in instead.' });
+    }
+
+    let id = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) id = `shop-${Date.now()}`;
     const existing = await Business.findOne({ id });
     if (existing) {
       id = `${id}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -519,22 +555,58 @@ app.post('/api/business', async (req, res) => {
 
     const business = new Business({
       id,
-      name,
-      phone,
-      email,
+      name: String(name).trim(),
+      phone: cleanPhone,
+      email: cleanEmail,
       password: hashedPassword,
-      tillNumber: tillNumber || process.env.PAYHERO_CHANNEL_ID || '6669',
+      tillNumber: tillNumber || process.env.PAYHERO_TILL_NUMBER || process.env.PAYHERO_CHANNEL_ID || '6669',
       reportLanguage: normalizeReportLanguage(reportLanguage)
     });
 
     await business.save();
-    console.log(`[BUSINESS REGISTERED] ID: ${id}, Name: ${name}, Email: ${email}`);
+    console.log(`[BUSINESS REGISTERED] ID: ${id}`);
 
-    res.status(201).json(toPublicBusiness(business));
+    res.status(201).json(withSession(business));
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ error: 'An account with that phone or email already exists. Log in instead.' });
+    }
     console.error("Business signup error:", error);
     res.status(500).json({ error: "Failed to register business profile" });
   }
+});
+
+app.post('/api/business/login', async (req, res) => {
+  try {
+    const identifier = String(req.body?.phone || req.body?.email || req.body?.identifier || '').trim();
+    const { password } = req.body || {};
+    if (!identifier || !password) {
+      return res.status(400).json({ error: 'Phone or email and password are required' });
+    }
+    if (!rateLimit(`login:${req.ip}:${identifier.toLowerCase()}`)) {
+      return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+    }
+
+    const query = looksLikeEmail(identifier)
+      ? { email: normalizeEmail(identifier) }
+      : { phone: normalizePhone(identifier) };
+
+    const business = await Business.findOne(query);
+    const match = await verifyBusinessPassword(business, password);
+    if (!business || !match) {
+      return res.status(401).json({ error: 'Phone, email or password is incorrect' });
+    }
+
+    res.json(withSession(business));
+  } catch (error) {
+    console.error('Business login error:', error);
+    res.status(500).json({ error: 'Failed to log in' });
+  }
+});
+
+app.post('/api/business/logout', (req, res) => {
+  revokeSession(req.headers.authorization);
+  res.json({ success: true });
 });
 
 // 9. Fetch Business Details Endpoint
@@ -553,7 +625,7 @@ app.get('/api/business/:id', async (req, res) => {
 
 // 9b. Update language and compliance profile. Old records without
 // reportLanguage stay English via normalizeReportLanguage — no migration.
-app.patch('/api/business/:id', async (req, res) => {
+app.patch('/api/business/:id', requireOwnBusiness, async (req, res) => {
   try {
     const business = await Business.findOne({ id: req.params.id });
     if (!business) {

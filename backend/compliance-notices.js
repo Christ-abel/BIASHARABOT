@@ -127,3 +127,42 @@ export async function dispatchComplianceNotices({
 
   return { sent, skipped, language: lang };
 }
+
+/**
+ * Claim one notice window, send at most once, and record sent / mock / unknown.
+ * Used by the compliance worker and by tests with an in-memory store.
+ */
+export async function deliverNotice({ store, business, candidate, send }) {
+  if (!business?.complianceProfile?.smsOptIn) {
+    return { status: 'skipped' };
+  }
+
+  const query = { business_id: business.id, key: candidate.key };
+  await store.updateOne(query, {
+    $setOnInsert: {
+      business_id: business.id,
+      key: candidate.key,
+      obligation: candidate.obligation,
+      message: candidate.message,
+      status: 'pending'
+    }
+  });
+
+  const claimed = await store.findOneAndUpdate(
+    { ...query, status: 'pending' },
+    { $set: { status: 'sending' } }
+  );
+  if (!claimed) {
+    return { status: 'already' };
+  }
+
+  try {
+    const result = await send({ to: business.phone, message: candidate.message });
+    const status = result?.mock ? 'mock' : 'sent';
+    await store.updateOne(query, { $set: { status, message: candidate.message } });
+    return { status };
+  } catch {
+    await store.updateOne(query, { $set: { status: 'unknown' } });
+    return { status: 'unknown' };
+  }
+}

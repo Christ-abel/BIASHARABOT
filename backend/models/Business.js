@@ -6,10 +6,10 @@ const LANGUAGE_CODES = REPORT_LANGUAGES.map((row) => row.code);
 const businessSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
-  phone: { type: String, required: true },
-  email: { type: String, required: true },
+  phone: { type: String, required: true, index: true },
+  email: { type: String, required: true, index: true },
   password: { type: String, required: true },
-  tillNumber: { type: String, default: () => process.env.PAYHERO_CHANNEL_ID || '6669' },
+  tillNumber: { type: String, default: () => process.env.PAYHERO_TILL_NUMBER || process.env.PAYHERO_CHANNEL_ID || '6669' },
   // Missing on old records → mongoose (and normalizeReportLanguage) treat as en.
   reportLanguage: {
     type: String,

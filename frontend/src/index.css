@@ -131,6 +131,56 @@ header p {
   border-color: var(--color-indigo-ink);
 }
 
+.password-field {
+  position: relative;
+}
+
+.password-field .form-input {
+  padding-right: 76px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--color-indigo-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 6px 8px;
+}
+
+.password-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.auth-switch button {
+  border: 2px solid var(--color-gray-light);
+  background: var(--color-white);
+  color: var(--color-indigo-ink);
+  border-radius: var(--border-radius);
+  padding: 10px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-switch button.active {
+  border-color: var(--color-indigo-ink);
+  background: var(--color-indigo-ink);
+  color: var(--color-white);
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1197,12 +1247,11 @@ header p {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 28px 16px;
+  padding: 16px 16px 18px;
   border: 2px dashed var(--color-marigold);
   border-radius: var(--border-radius);
   background: #FFFDF9;
   text-align: center;
-  cursor: pointer;
   color: var(--color-indigo-ink);
 }
 
@@ -1227,15 +1276,17 @@ header p {
 .stock-upload-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .stock-upload-actions .btn {
   width: 100%;
-  padding: 12px 10px;
-  font-size: 14px;
+  min-height: 48px;
+  padding: 14px 10px;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .webcam-card {

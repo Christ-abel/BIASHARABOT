@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { API_BASE } from '../lib/api.js';
+import { API_BASE, authHeaders } from '../lib/api.js';
 import { formatKsh } from '../lib/format.js';
 
 const LANGUAGE_OPTIONS = [
@@ -74,7 +74,7 @@ export default function SettingsPanel({ business, online, onBusinessChange, onEr
   const patchBusiness = async (body) => {
     const response = await fetch(`${API_BASE}/business/${business.id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body)
     });
     const data = await response.json();

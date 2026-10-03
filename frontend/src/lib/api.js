@@ -1,7 +1,24 @@
 // Single source of truth for the backend URL, shared by the UI and the
 // offline outbox. Override at build time with VITE_API_BASE.
 export const API_BASE =
-  import.meta.env.VITE_API_BASE || 'https://biasharagpt.onrender.com/api';
+  import.meta.env.VITE_API_BASE ||
+  (import.meta.env.DEV ? 'http://localhost:5000/api' : 'https://biasharagpt.onrender.com/api');
+
+export const AUTH_TOKEN_KEY = 'biashara_token';
+
+export const getAuthToken = () =>
+  typeof localStorage === 'undefined' ? '' : localStorage.getItem(AUTH_TOKEN_KEY) || '';
+
+export const setAuthToken = (token) => {
+  if (typeof localStorage === 'undefined') return;
+  if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+  else localStorage.removeItem(AUTH_TOKEN_KEY);
+};
+
+export const authHeaders = () => {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 /** True when the browser reports no connectivity (a hint, never a guarantee). */
 export const isOffline = () =>

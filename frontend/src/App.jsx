@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { API_BASE, isNetworkError, isOffline } from './lib/api.js';
+import { API_BASE, authHeaders, isNetworkError, isOffline, setAuthToken } from './lib/api.js';
 import { readSnapshot, saveSnapshot } from './lib/idb.js';
 import {
   discardOutboxItem,
@@ -15,6 +15,7 @@ import InstallPrompt from './components/InstallPrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
 import StockPanel from './components/StockPanel.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
+import PasswordField from './components/PasswordField.jsx';
 
 // The service worker replays the last good API response when the network is
 // gone, and stamps it so the UI can say "this is a saved copy" instead of
@@ -74,11 +75,14 @@ export default function App() {
     const saved = localStorage.getItem('biashara_business');
     return saved ? JSON.parse(saved) : null;
   });
+  const [authMode, setAuthMode] = useState('login');
   const [setupName, setSetupName] = useState('');
   const [setupPhone, setSetupPhone] = useState('');
   const [setupEmail, setSetupEmail] = useState('');
   const [setupPassword, setSetupPassword] = useState('');
   const [setupConfirmPassword, setSetupConfirmPassword] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
 
   // Main UI State
   const [activeTab, setActiveTab] = useState(initialTab); // 'ledger' (Dashboard), 'report' (Till slip), 'admin' (Admin Ledger)
@@ -238,15 +242,17 @@ export default function App() {
   });
 
   const persistBusiness = (next) => {
-    localStorage.setItem('biashara_business', JSON.stringify(next));
-    setBusiness(next);
+    const { token, ...safe } = next || {};
+    if (token) setAuthToken(token);
+    localStorage.setItem('biashara_business', JSON.stringify(safe));
+    setBusiness(safe);
   };
 
   // Trigger data load on mount or business change
   useEffect(() => {
     if (business) {
       fetchEntries();
-      fetch(`${API_BASE}/business/${business.id}`)
+      fetch(`${API_BASE}/business/${business.id}`, { headers: authHeaders() })
         .then((response) => (response.ok ? response.json() : null))
         .then((fresh) => {
           if (!fresh) return;
@@ -278,6 +284,10 @@ export default function App() {
       setError('Passwords do not match');
       return;
     }
+    if (setupPassword.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -295,8 +305,7 @@ export default function App() {
 
       if (response.ok) {
         const newBiz = await response.json();
-        localStorage.setItem('biashara_business', JSON.stringify(newBiz));
-        setBusiness(newBiz);
+        persistBusiness(newBiz);
         setSetupName('');
         setSetupPhone('');
         setSetupEmail('');
@@ -307,6 +316,34 @@ export default function App() {
         setError(errData.error || 'Failed to sign up business');
       }
     } catch (err) {
+      setError('Connection to backend failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLoginSubmit = async (e) => {
+    e.preventDefault();
+    if (!loginIdentifier.trim() || !loginPassword) {
+      setError('Enter your phone or email and password');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/business/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: loginIdentifier, password: loginPassword })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error || 'Could not log in');
+        return;
+      }
+      persistBusiness(data);
+      setLoginPassword('');
+    } catch {
       setError('Connection to backend failed');
     } finally {
       setLoading(false);
@@ -610,11 +647,18 @@ export default function App() {
 
   // Logout (Immediately logs out to resolve confirm popups blocking headless browser tests)
   const handleLogout = () => {
+    const tokenHeaders = authHeaders();
+    if (tokenHeaders.Authorization) {
+      fetch(`${API_BASE}/business/logout`, { method: 'POST', headers: tokenHeaders, keepalive: true }).catch(() => {});
+    }
     localStorage.removeItem('biashara_business');
+    setAuthToken('');
     sessionStorage.removeItem('biashara_admin_auth');
+    setIsAdminAuthenticated(false);
     setBusiness(null);
     setEntries([]);
     setReport(null);
+    setAuthMode('login');
   };
 
   // Calculate Running Totals for Today
@@ -652,19 +696,59 @@ export default function App() {
         </header>
         <div className="content">
           <InstallPrompt />
-          <form className="setup-card" onSubmit={handleSetupSubmit}>
-            <h2>Business Sign Up</h2>
-            <p>Register your duka or shop</p>
+          <form className="setup-card" onSubmit={authMode === 'login' ? handleLoginSubmit : handleSetupSubmit}>
+            <h2>{authMode === 'login' ? 'Log in to your shop' : 'Business Sign Up'}</h2>
+            <p>{authMode === 'login' ? 'Use the phone or email you registered with' : 'Register your duka or shop'}</p>
+
+            <div className="auth-switch" role="tablist">
+              <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => { setAuthMode('login'); setError(null); }}>
+                Log in
+              </button>
+              <button type="button" className={authMode === 'signup' ? 'active' : ''} onClick={() => { setAuthMode('signup'); setError(null); }}>
+                Register
+              </button>
+            </div>
 
             {!online && (
               <div className="error-message">
-                You are offline. Signing up needs network once — after that the app records sales
+                You are offline. Logging in or signing up needs network once — after that the app records sales
                 without it.
               </div>
             )}
 
             {error && <div className="error-message">{error}</div>}
 
+            {authMode === 'login' ? (
+              <>
+                <div className="form-group">
+                  <label htmlFor="login-identifier">Phone or email</label>
+                  <input
+                    id="login-identifier"
+                    type="text"
+                    className="form-input"
+                    placeholder="0712345678 or name@business.com"
+                    value={loginIdentifier}
+                    onChange={(e) => setLoginIdentifier(e.target.value)}
+                    required
+                    disabled={loading}
+                    autoComplete="username"
+                  />
+                </div>
+                <PasswordField
+                  id="login-password"
+                  label="Password"
+                  placeholder="Enter your password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  disabled={loading}
+                  autoComplete="current-password"
+                />
+                <button type="submit" className="btn btn-primary" disabled={loading || !online}>
+                  {loading ? <div className="loading-spinner" style={{ borderColor: 'var(--color-indigo-ink)' }} /> : 'Log in'}
+                </button>
+              </>
+            ) : (
+              <>
             <div className="form-group">
               <label>Business Name</label>
               <input
@@ -705,35 +789,30 @@ export default function App() {
               />
             </div>
 
-            <div className="form-group">
-              <label>Setup Admin Password</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder="Choose Admin Password"
-                value={setupPassword}
-                onChange={(e) => setSetupPassword(e.target.value)}
-                required
-                disabled={loading}
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Confirm Admin Password</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder="Confirm Admin Password"
-                value={setupConfirmPassword}
-                onChange={(e) => setSetupConfirmPassword(e.target.value)}
-                required
-                disabled={loading}
-              />
-            </div>
+            <PasswordField
+              id="signup-password"
+              label="Setup Admin Password"
+              placeholder="At least 8 characters"
+              value={setupPassword}
+              onChange={(e) => setSetupPassword(e.target.value)}
+              disabled={loading}
+              autoComplete="new-password"
+            />
+            <PasswordField
+              id="signup-confirm"
+              label="Confirm Admin Password"
+              placeholder="Type it again to confirm"
+              value={setupConfirmPassword}
+              onChange={(e) => setSetupConfirmPassword(e.target.value)}
+              disabled={loading}
+              autoComplete="new-password"
+            />
 
             <button type="submit" className="btn btn-primary" disabled={loading || !online}>
               {loading ? <div className="loading-spinner" style={{ borderColor: 'var(--color-indigo-ink)' }} /> : 'Register & Sync'}
             </button>
+              </>
+            )}
           </form>
         </div>
       </div>
@@ -1103,17 +1182,14 @@ export default function App() {
                 {adminError && <div className="error-message">{adminError}</div>}
 
                 <form onSubmit={handleAdminVerify}>
-                  <div className="form-group">
-                    <label>Admin Password</label>
-                    <input
-                      type="password"
-                      className="form-input"
-                      placeholder="Enter Admin Password"
-                      value={adminPassword}
-                      onChange={(e) => setAdminPassword(e.target.value)}
-                      required
-                    />
-                  </div>
+                  <PasswordField
+                    id="admin-password"
+                    label="Admin Password"
+                    placeholder="Enter Admin Password"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    autoComplete="current-password"
+                  />
 
                   <button type="submit" className="btn btn-secondary" disabled={adminLoading}>
                     {adminLoading ? 'Verifying...' : 'Unlock Ledger'}
