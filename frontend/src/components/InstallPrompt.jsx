@@ -38,13 +38,13 @@ export default function InstallPrompt() {
   return (
     <div className="install-card">
       <div className="install-text">
-        <strong>Install BiasharaGPT on this phone</strong>
+        <strong>Install BiasharaBot on this phone</strong>
         <span>Works without network — record sales anywhere, they sync when you get signal.</span>
         {showIosSteps && (
           <ol className="install-steps">
             <li>Tap the Share button in Safari's toolbar.</li>
             <li>Scroll and choose “Add to Home Screen”.</li>
-            <li>Tap “Add” — then open BiasharaGPT from your home screen.</li>
+            <li>Tap “Add” — then open BiasharaBot from your home screen.</li>
           </ol>
         )}
       </div>

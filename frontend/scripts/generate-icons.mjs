@@ -1,5 +1,5 @@
 /**
- * Generates the BiasharaGPT PWA icon set.
+ * Generates the BiasharaBot PWA icon set.
  *
  *   node scripts/generate-icons.mjs
  *

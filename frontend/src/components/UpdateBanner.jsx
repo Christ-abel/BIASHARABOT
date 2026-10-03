@@ -14,7 +14,7 @@ export default function UpdateBanner() {
 
   return (
     <div className="update-banner" role="status">
-      <span>A new version of BiasharaGPT is ready.</span>
+      <span>A new version of BiasharaBot is ready.</span>
       <button type="button" onClick={applyUpdate}>
         Reload
       </button>

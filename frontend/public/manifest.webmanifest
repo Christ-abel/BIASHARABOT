@@ -1,7 +1,7 @@
 {
   "id": "/?source=pwa",
-  "name": "BiasharaGPT — Duka Ledger",
-  "short_name": "BiasharaGPT",
+  "name": "BiasharaBot — Duka Ledger",
+  "short_name": "BiasharaBot",
   "description": "Log sales by voice even without network. Entries sync and reconcile automatically once you are back online.",
   "lang": "en",
   "dir": "ltr",

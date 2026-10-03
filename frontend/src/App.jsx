@@ -622,7 +622,7 @@ export default function App() {
     return (
       <div className="app-container">
         <header>
-          <h1>BiasharaGPT</h1>
+          <h1>BiasharaBot</h1>
           <p>Kenyan's Number one shop assistant</p>
         </header>
         <div className="content">
@@ -903,7 +903,7 @@ export default function App() {
                 )}
 
                 <div className="receipt-card">
-                  <div className="receipt-title">BiasharaGPT</div>
+                  <div className="receipt-title">BiasharaBot</div>
                   <div className="receipt-subtitle">{business.name.toUpperCase()} WEEKLY REPORT</div>
 
                   <div className="receipt-divider" />
@@ -950,7 +950,7 @@ export default function App() {
 
                   <div className="receipt-footer-text">
                     Printed at {new Date().toLocaleDateString()}<br />
-                    Powered by BiasharaGPT
+                    Powered by BiasharaBot
                   </div>
                 </div>
               </>

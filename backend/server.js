@@ -306,7 +306,7 @@ function buildReportMessage({ title, businessName, revenue, cost_of_goods, other
     `Net Profit: KSh ${net_profit.toFixed(2)}\n` +
     `Outstanding Credit: KSh ${outstanding_credit.toFixed(2)}\n` +
     `---------------------\n` +
-    `Powered by BiasharaGPT!`;
+    `Powered by BiasharaBot!`;
 }
 
 app.get('/api/reports/weekly', async (req, res) => {
@@ -357,7 +357,7 @@ app.get('/api/reports/weekly', async (req, res) => {
     let smsStatus = null;
     if (phone) {
       const smsMessage = buildReportMessage({
-        title: 'BiasharaGPT Weekly Report',
+        title: 'BiasharaBot Weekly Report',
         businessName: bname,
         revenue,
         cost_of_goods,
@@ -396,7 +396,7 @@ app.post('/api/reports/daily/schedule-test', async (req, res) => {
     };
 
     const message = buildReportMessage({
-      title: 'BiasharaGPT Daily Report',
+      title: 'BiasharaBot Daily Report',
       businessName,
       ...mockReport
     });
@@ -516,6 +516,6 @@ app.get('/api/business/:id', async (req, res) => {
 
 // Start Server
 app.listen(PORT, () => {
-  console.log(`BiasharaGPT Server running on http://localhost:${PORT}`);
+  console.log(`BiasharaBot Server running on http://localhost:${PORT}`);
 });
 // Nodemon trigger change

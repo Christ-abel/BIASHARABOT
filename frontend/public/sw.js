@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
 /**
- * BiasharaGPT service worker.
+ * BiasharaBot service worker.
  *
  * Written as a classic (non-module) worker so it runs on every browser a duka
  * owner is likely to have, including older Android WebViews and Firefox, which
@@ -134,7 +134,7 @@ async function handleNavigation(request) {
       (await cache.match('/index.html')) ||
       (await cache.match('/')) ||
       new Response(
-        '<h1>BiasharaGPT is offline</h1><p>Open the app once while online to install it for offline use.</p>',
+        '<h1>BiasharaBot is offline</h1><p>Open the app once while online to install it for offline use.</p>',
         { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
       )
     );
