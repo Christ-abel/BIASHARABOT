@@ -2,7 +2,7 @@
 // offline outbox. Override at build time with VITE_API_BASE.
 export const API_BASE =
   import.meta.env.VITE_API_BASE ||
-  (import.meta.env.DEV ? 'http://localhost:5000/api' : 'https://biasharagpt.onrender.com/api');
+  (import.meta.env.DEV ? 'http://localhost:5000/api' : 'https://biasharabot-0ghr.onrender.com/api');
 
 export const AUTH_TOKEN_KEY = 'biashara_token';
 

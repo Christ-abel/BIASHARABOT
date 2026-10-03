@@ -357,7 +357,7 @@ app.post('/api/webhooks/payhero', async (req, res) => {
 
 // 5b. Tiara Connect DELIVERY_REPORT Webhook
 // Register in Tiara dashboard as callback type: DELIVERY_REPORT
-// URL: https://biasharagpt.onrender.com/api/webhooks/tiara-delivery
+// URL: https://biasharabot-0ghr.onrender.com/api/webhooks/tiara-delivery
 app.post('/api/webhooks/tiara-delivery', (req, res) => {
   console.log("[TIARA DELIVERY_REPORT]", JSON.stringify(req.body, null, 2));
   // Once you see the real payload shape here, match req.body.refId
@@ -367,7 +367,7 @@ app.post('/api/webhooks/tiara-delivery', (req, res) => {
 
 // 5c. Tiara Connect MO (Mobile Originated) Webhook
 // Register in Tiara dashboard as callback type: MO
-// URL: https://biasharagpt.onrender.com/api/webhooks/tiara-mo
+// URL: https://biasharabot-0ghr.onrender.com/api/webhooks/tiara-mo
 app.post('/api/webhooks/tiara-mo', (req, res) => {
   console.log("[TIARA MO]", JSON.stringify(req.body, null, 2));
   // TODO: extract sender phone + message text, route through
