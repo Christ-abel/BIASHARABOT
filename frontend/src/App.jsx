@@ -7,14 +7,14 @@ import {
   enqueueVoiceEntry,
   retryOutboxItem,
 } from './lib/outbox.js';
-import { formatKsh, timeAgo } from './lib/format.js';
-import { DEFAULT_REPORT_LABELS } from './lib/reportLabels.js';
+import { formatKsh, formatPercent, timeAgo } from './lib/format.js';
 import { useOfflineSync } from './hooks/useOfflineSync.js';
 import ConnectionBar from './components/ConnectionBar.jsx';
 import PendingEntries from './components/PendingEntries.jsx';
 import InstallPrompt from './components/InstallPrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
-import ReportLanguageSetting from './components/ReportLanguageSetting.jsx';
+import StockPanel from './components/StockPanel.jsx';
+import SettingsPanel from './components/SettingsPanel.jsx';
 
 // The service worker replays the last good API response when the network is
 // gone, and stamps it so the UI can say "this is a saved copy" instead of
@@ -24,7 +24,7 @@ const servedFromCache = (response) => response.headers.get('X-Biashara-From-Cach
 // Home-screen shortcuts in the manifest deep-link with ?tab=...
 const initialTab = () => {
   const tab = new URLSearchParams(window.location.search).get('tab');
-  return ['ledger', 'report', 'admin'].includes(tab) ? tab : 'ledger';
+  return ['ledger', 'stock', 'report', 'settings', 'admin'].includes(tab) ? tab : 'ledger';
 };
 
 // SVG Icons
@@ -119,11 +119,9 @@ export default function App() {
 
   // Weekly Report State
   const [report, setReport] = useState(null);
-  // Labels arrive with the report in the owner's chosen language; the SMS
-  // uses the very same strings, so the two always read alike.
-  const [reportLabels, setReportLabels] = useState(DEFAULT_REPORT_LABELS);
+  const [reportLabels, setReportLabels] = useState(null);
+  // True when the server could not translate and served English instead.
   const [reportLanguageFallback, setReportLanguageFallback] = useState(false);
-  const [languageSaving, setLanguageSaving] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [smsStatus, setSmsStatus] = useState(null);
 
@@ -179,7 +177,7 @@ export default function App() {
 
       const data = await response.json();
       setReport(data.report);
-      setReportLabels({ ...DEFAULT_REPORT_LABELS, ...(data.labels || {}) });
+      setReportLabels(data.labels || null);
       setReportLanguageFallback(Boolean(data.languageFallback));
 
       if (servedFromCache(response)) {
@@ -192,7 +190,9 @@ export default function App() {
       }
 
       setReportSavedAt(null);
-      saveSnapshot(cacheKey, { figures: data.report, labels: data.labels, language: data.language });
+      // Keep the labels with the figures so an offline till slip stays in the
+      // owner's language instead of dropping back to English.
+      saveSnapshot(cacheKey, { figures: data.report, labels: data.labels || null, language: data.language || 'en' });
       if (data.smsStatus && data.smsStatus.success) {
         setSmsStatus({ success: true, message: `Weekly report SMS sent automatically to ${business.phone}!` });
       } else {
@@ -203,9 +203,9 @@ export default function App() {
       const snapshot = await readSnapshot(cacheKey);
       if (snapshot) {
         // Snapshots saved before reports carried labels hold the bare figures.
-        const figures = snapshot.data?.figures || snapshot.data;
-        setReport(figures);
-        setReportLabels({ ...DEFAULT_REPORT_LABELS, ...(snapshot.data?.labels || {}) });
+        const saved = snapshot.data || {};
+        setReport(saved.figures || saved);
+        setReportLabels(saved.labels || null);
         setReportLanguageFallback(false);
         setReportSavedAt(snapshot.savedAt);
         setSmsStatus(null);
@@ -237,12 +237,24 @@ export default function App() {
     },
   });
 
+  const persistBusiness = (next) => {
+    localStorage.setItem('biashara_business', JSON.stringify(next));
+    setBusiness(next);
+  };
+
   // Trigger data load on mount or business change
   useEffect(() => {
     if (business) {
       fetchEntries();
+      fetch(`${API_BASE}/business/${business.id}`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((fresh) => {
+          if (!fresh) return;
+          persistBusiness({ ...business, ...fresh });
+        })
+        .catch(() => {});
     }
-  }, [business]);
+  }, [business?.id]);
 
   // Handle active tab change
   useEffect(() => {
@@ -596,40 +608,6 @@ export default function App() {
     }
   };
 
-  // Save the owner's report language on the server (the SMS is generated
-  // there), refresh the cached profile, then regenerate the report so the
-  // change shows up straight away on the till slip and in the SMS.
-  const handleReportLanguageChange = async (reportLanguage) => {
-    if (!business || reportLanguage === (business.reportLanguage || 'en')) return;
-    setLanguageSaving(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      const response = await fetch(`${API_BASE}/business/${business.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportLanguage })
-      });
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `Could not save the report language (${response.status})`);
-      }
-      const updated = await response.json();
-      const nextBusiness = { ...business, reportLanguage: updated.reportLanguage };
-      localStorage.setItem('biashara_business', JSON.stringify(nextBusiness));
-      setBusiness(nextBusiness);
-      await fetchReportAndSendSMS();
-    } catch (err) {
-      setError(
-        isNetworkError(err)
-          ? 'Changing the report language needs network. Try again when you are connected.'
-          : err.message
-      );
-    } finally {
-      setLanguageSaving(false);
-    }
-  };
-
   // Logout (Immediately logs out to resolve confirm popups blocking headless browser tests)
   const handleLogout = () => {
     localStorage.removeItem('biashara_business');
@@ -808,10 +786,22 @@ export default function App() {
           Daily Ledger
         </button>
         <button
+          className={`nav-tab ${activeTab === 'stock' ? 'active' : ''}`}
+          onClick={() => setActiveTab('stock')}
+        >
+          Stock
+        </button>
+        <button
           className={`nav-tab ${activeTab === 'report' ? 'active' : ''}`}
           onClick={() => setActiveTab('report')}
         >
           Weekly till slip
+        </button>
+        <button
+          className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
+          onClick={() => setActiveTab('settings')}
+        >
+          Settings
         </button>
         <button
           className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
@@ -828,6 +818,16 @@ export default function App() {
         {activeTab === 'ledger' && (
           <>
             <InstallPrompt />
+
+            {(!business.county || business.kraPin === 'unknown' || !business.kraPin) && (
+              <button
+                type="button"
+                className="offline-capture-note compliance-banner"
+                onClick={() => setActiveTab('settings')}
+              >
+                Finish your shop profile to see the tax and permit deadlines that apply to you.
+              </button>
+            )}
 
             {/* Today's Summary Metrics */}
             <div className="metrics-grid">
@@ -927,23 +927,29 @@ export default function App() {
           </>
         )}
 
+        {activeTab === 'stock' && (
+          <StockPanel
+            business={business}
+            online={online}
+            onSaved={fetchEntries}
+            onError={setError}
+            onSuccess={setSuccess}
+          />
+        )}
+
+        {activeTab === 'settings' && (
+          <SettingsPanel
+            business={business}
+            online={online}
+            onBusinessChange={persistBusiness}
+            onError={setError}
+            onSuccess={setSuccess}
+          />
+        )}
+
         {activeTab === 'report' && (
           /* Weekly receipt till slip view (SMS sent automatically on render) */
           <div className="receipt-wrapper">
-            <ReportLanguageSetting
-              value={business.reportLanguage || 'en'}
-              onChange={handleReportLanguageChange}
-              online={online}
-              saving={languageSaving}
-            />
-
-            {reportLanguageFallback && !reportLoading && (
-              <div className="offline-snapshot-note">
-                Translation was unavailable, so this report is shown in English. The SMS went out in
-                English too.
-              </div>
-            )}
-
             {reportLoading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '50px 0' }}>
                 <div className="loading-spinner" />
@@ -963,32 +969,37 @@ export default function App() {
                   </div>
                 )}
 
+                {reportLanguageFallback && (
+                  <div className="offline-snapshot-note">
+                    {reportLabels?.languageFallbackNote || 'Showing English — translation was unavailable.'}
+                  </div>
+                )}
+
                 <div className="receipt-card">
                   <div className="receipt-title">BiasharaBot</div>
-                  <div className="receipt-subtitle">{reportLabels.title_weekly.toUpperCase()}</div>
                   <div className="receipt-subtitle">
-                    {reportLabels.shop.toUpperCase()}: {business.name.toUpperCase()}
+                    {business.name.toUpperCase()} {reportLabels?.weeklySubtitle || 'WEEKLY REPORT'}
                   </div>
 
                   <div className="receipt-divider" />
 
                   <div className="receipt-row">
-                    <span className="label">{reportLabels.revenue.toUpperCase()}</span>
+                    <span className="label">{reportLabels?.revenue || 'REVENUE'}</span>
                     <span className="value mono">KSh {report.revenue.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">{reportLabels.cost_of_goods.toUpperCase()}</span>
+                    <span className="label">{reportLabels?.costOfGoods || 'COST OF GOODS (PURCHASES)'}</span>
                     <span className="value mono">KSh {report.cost_of_goods.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">{reportLabels.other_expenses.toUpperCase()}</span>
+                    <span className="label">{reportLabels?.otherExpenses || 'OTHER EXPENSES'}</span>
                     <span className="value mono">KSh {report.other_expenses.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">{reportLabels.mpesa_fees.toUpperCase()}</span>
+                    <span className="label">{reportLabels?.mpesaFees || 'M-PESA CHARGES (PAYHERO)'}</span>
                     <span className="value mono">KSh {report.mpesa_fees.toFixed(2)}</span>
                   </div>
 
@@ -999,22 +1010,76 @@ export default function App() {
                       report.net_profit >= 0 ? 'positive' : 'negative'
                     }`}
                   >
-                    <span className="label">{reportLabels.net_profit.toUpperCase()}</span>
+                    <span className="label">{reportLabels?.netProfit || 'NET PROFIT'}</span>
                     <span className="value mono">KSh {report.net_profit.toFixed(2)}</span>
                   </div>
 
                   <div className="dotted-rule" />
 
+                  <div className="receipt-section-title">{reportLabels?.grossProfitByItem || 'GROSS PROFIT BY ITEM'}</div>
+                  <p className="receipt-section-note">
+                    {reportLabels?.grossNote ||
+                      'Cost of goods sold uses the unit cost you recorded on Stock. Net profit above is still cash in minus cash out.'}
+                  </p>
+
+                  {Array.isArray(report.item_profits) && report.item_profits.length > 0 ? (
+                    report.item_profits.map((row) => (
+                      <div className="receipt-item-profit" key={row.item}>
+                        <div className="receipt-row">
+                          <span className="label">{row.item.toUpperCase()}</span>
+                          <span className="value mono">
+                            {row.cost_unknown
+                              ? (reportLabels?.noCostYet || 'NO COST YET')
+                              : `KSh ${Number(row.gross_profit).toFixed(2)}`}
+                          </span>
+                        </div>
+                        <div className="receipt-item-meta">
+                          {row.qty_sold} {reportLabels?.sold || 'sold'} · {reportLabels?.rev || 'rev'} {formatKsh(row.revenue)}
+                          {row.cost_unknown
+                            ? ` · ${reportLabels?.addStockForMargin || 'add stock to see margin'}`
+                            : ` · ${reportLabels?.cost || 'cost'} ${formatKsh(row.cogs)} · ${formatPercent(row.margin)}`}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="receipt-item-meta" style={{ marginBottom: '10px' }}>
+                      {reportLabels?.noSales || 'No sales this week yet.'}
+                    </div>
+                  )}
+
+                  {report.items_missing_cost > 0 && (
+                    <div className="receipt-item-meta" style={{ marginBottom: '8px' }}>
+                      {(reportLabels?.itemsMissingCost || '{count} sold item(s) have no stock cost yet').replace(
+                        '{count}',
+                        String(report.items_missing_cost)
+                      )}
+                    </div>
+                  )}
+
+                  <div
+                    className={`receipt-row total-row ${
+                      Number(report.gross_profit || 0) >= 0 ? 'positive' : 'negative'
+                    }`}
+                  >
+                    <span className="label">{reportLabels?.grossProfit || 'GROSS PROFIT'}</span>
+                    <span className="value mono">
+                      KSh {Number(report.gross_profit || 0).toFixed(2)}
+                      {Number.isFinite(report.gross_margin) ? ` (${formatPercent(report.gross_margin)})` : ''}
+                    </span>
+                  </div>
+
+                  <div className="dotted-rule" />
+
                   <div className="receipt-row">
-                    <span className="label">{reportLabels.outstanding_credit.toUpperCase()}</span>
+                    <span className="label">{reportLabels?.outstandingCredit || 'OUTSTANDING CREDIT'}</span>
                     <span className="value mono" style={{ color: '#8E44AD' }}>
                       KSh {report.outstanding_credit.toFixed(2)}
                     </span>
                   </div>
 
                   <div className="receipt-footer-text">
-                    {reportLabels.printed_at} {new Date().toLocaleDateString()}<br />
-                    {reportLabels.footer}
+                    {reportLabels?.printedAt || 'Printed at'} {new Date().toLocaleDateString()}<br />
+                    {reportLabels?.poweredBy || 'Powered by BiasharaBot'}
                   </div>
                 </div>
               </>

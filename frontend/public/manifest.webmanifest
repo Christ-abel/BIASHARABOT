@@ -63,6 +63,12 @@
       "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
+      "name": "Record stock",
+      "short_name": "Stock",
+      "url": "/?tab=stock&source=shortcut",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
       "name": "Weekly till slip",
       "short_name": "Till slip",
       "url": "/?tab=report&source=shortcut",
