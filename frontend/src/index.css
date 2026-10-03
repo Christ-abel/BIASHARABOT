@@ -1167,3 +1167,34 @@ header p {
     flex: 1;
   }
 }
+
+/* Settings ------------------------------------------------------------------ */
+
+.settings-card {
+  background: var(--color-white);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-md);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.settings-field {
+  margin-bottom: 0;
+}
+
+.settings-card select.form-input {
+  appearance: auto;
+  cursor: pointer;
+}
+
+.settings-card select.form-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.settings-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-gray-dark);
+}

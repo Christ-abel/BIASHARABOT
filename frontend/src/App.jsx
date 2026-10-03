@@ -8,11 +8,13 @@ import {
   retryOutboxItem,
 } from './lib/outbox.js';
 import { formatKsh, timeAgo } from './lib/format.js';
+import { DEFAULT_REPORT_LABELS } from './lib/reportLabels.js';
 import { useOfflineSync } from './hooks/useOfflineSync.js';
 import ConnectionBar from './components/ConnectionBar.jsx';
 import PendingEntries from './components/PendingEntries.jsx';
 import InstallPrompt from './components/InstallPrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
+import ReportLanguageSetting from './components/ReportLanguageSetting.jsx';
 
 // The service worker replays the last good API response when the network is
 // gone, and stamps it so the UI can say "this is a saved copy" instead of
@@ -117,6 +119,11 @@ export default function App() {
 
   // Weekly Report State
   const [report, setReport] = useState(null);
+  // Labels arrive with the report in the owner's chosen language; the SMS
+  // uses the very same strings, so the two always read alike.
+  const [reportLabels, setReportLabels] = useState(DEFAULT_REPORT_LABELS);
+  const [reportLanguageFallback, setReportLanguageFallback] = useState(false);
+  const [languageSaving, setLanguageSaving] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [smsStatus, setSmsStatus] = useState(null);
 
@@ -172,6 +179,8 @@ export default function App() {
 
       const data = await response.json();
       setReport(data.report);
+      setReportLabels({ ...DEFAULT_REPORT_LABELS, ...(data.labels || {}) });
+      setReportLanguageFallback(Boolean(data.languageFallback));
 
       if (servedFromCache(response)) {
         // A replayed response means no SMS went out just now — saying it did
@@ -183,7 +192,7 @@ export default function App() {
       }
 
       setReportSavedAt(null);
-      saveSnapshot(cacheKey, data.report);
+      saveSnapshot(cacheKey, { figures: data.report, labels: data.labels, language: data.language });
       if (data.smsStatus && data.smsStatus.success) {
         setSmsStatus({ success: true, message: `Weekly report SMS sent automatically to ${business.phone}!` });
       } else {
@@ -193,7 +202,11 @@ export default function App() {
       console.warn('Serving weekly report from offline snapshot:', err);
       const snapshot = await readSnapshot(cacheKey);
       if (snapshot) {
-        setReport(snapshot.data);
+        // Snapshots saved before reports carried labels hold the bare figures.
+        const figures = snapshot.data?.figures || snapshot.data;
+        setReport(figures);
+        setReportLabels({ ...DEFAULT_REPORT_LABELS, ...(snapshot.data?.labels || {}) });
+        setReportLanguageFallback(false);
         setReportSavedAt(snapshot.savedAt);
         setSmsStatus(null);
       } else {
@@ -583,6 +596,40 @@ export default function App() {
     }
   };
 
+  // Save the owner's report language on the server (the SMS is generated
+  // there), refresh the cached profile, then regenerate the report so the
+  // change shows up straight away on the till slip and in the SMS.
+  const handleReportLanguageChange = async (reportLanguage) => {
+    if (!business || reportLanguage === (business.reportLanguage || 'en')) return;
+    setLanguageSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await fetch(`${API_BASE}/business/${business.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportLanguage })
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Could not save the report language (${response.status})`);
+      }
+      const updated = await response.json();
+      const nextBusiness = { ...business, reportLanguage: updated.reportLanguage };
+      localStorage.setItem('biashara_business', JSON.stringify(nextBusiness));
+      setBusiness(nextBusiness);
+      await fetchReportAndSendSMS();
+    } catch (err) {
+      setError(
+        isNetworkError(err)
+          ? 'Changing the report language needs network. Try again when you are connected.'
+          : err.message
+      );
+    } finally {
+      setLanguageSaving(false);
+    }
+  };
+
   // Logout (Immediately logs out to resolve confirm popups blocking headless browser tests)
   const handleLogout = () => {
     localStorage.removeItem('biashara_business');
@@ -883,6 +930,20 @@ export default function App() {
         {activeTab === 'report' && (
           /* Weekly receipt till slip view (SMS sent automatically on render) */
           <div className="receipt-wrapper">
+            <ReportLanguageSetting
+              value={business.reportLanguage || 'en'}
+              onChange={handleReportLanguageChange}
+              online={online}
+              saving={languageSaving}
+            />
+
+            {reportLanguageFallback && !reportLoading && (
+              <div className="offline-snapshot-note">
+                Translation was unavailable, so this report is shown in English. The SMS went out in
+                English too.
+              </div>
+            )}
+
             {reportLoading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '50px 0' }}>
                 <div className="loading-spinner" />
@@ -904,27 +965,30 @@ export default function App() {
 
                 <div className="receipt-card">
                   <div className="receipt-title">BiasharaBot</div>
-                  <div className="receipt-subtitle">{business.name.toUpperCase()} WEEKLY REPORT</div>
+                  <div className="receipt-subtitle">{reportLabels.title_weekly.toUpperCase()}</div>
+                  <div className="receipt-subtitle">
+                    {reportLabels.shop.toUpperCase()}: {business.name.toUpperCase()}
+                  </div>
 
                   <div className="receipt-divider" />
 
                   <div className="receipt-row">
-                    <span className="label">REVENUE</span>
+                    <span className="label">{reportLabels.revenue.toUpperCase()}</span>
                     <span className="value mono">KSh {report.revenue.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">COST OF GOODS (PURCHASES)</span>
+                    <span className="label">{reportLabels.cost_of_goods.toUpperCase()}</span>
                     <span className="value mono">KSh {report.cost_of_goods.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">OTHER EXPENSES</span>
+                    <span className="label">{reportLabels.other_expenses.toUpperCase()}</span>
                     <span className="value mono">KSh {report.other_expenses.toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">M-PESA CHARGES (PAYHERO)</span>
+                    <span className="label">{reportLabels.mpesa_fees.toUpperCase()}</span>
                     <span className="value mono">KSh {report.mpesa_fees.toFixed(2)}</span>
                   </div>
 
@@ -935,22 +999,22 @@ export default function App() {
                       report.net_profit >= 0 ? 'positive' : 'negative'
                     }`}
                   >
-                    <span className="label">NET PROFIT</span>
+                    <span className="label">{reportLabels.net_profit.toUpperCase()}</span>
                     <span className="value mono">KSh {report.net_profit.toFixed(2)}</span>
                   </div>
 
                   <div className="dotted-rule" />
 
                   <div className="receipt-row">
-                    <span className="label">OUTSTANDING CREDIT</span>
+                    <span className="label">{reportLabels.outstanding_credit.toUpperCase()}</span>
                     <span className="value mono" style={{ color: '#8E44AD' }}>
                       KSh {report.outstanding_credit.toFixed(2)}
                     </span>
                   </div>
 
                   <div className="receipt-footer-text">
-                    Printed at {new Date().toLocaleDateString()}<br />
-                    Powered by BiasharaBot
+                    {reportLabels.printed_at} {new Date().toLocaleDateString()}<br />
+                    {reportLabels.footer}
                   </div>
                 </div>
               </>
