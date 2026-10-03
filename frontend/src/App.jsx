@@ -79,6 +79,7 @@ export default function App() {
   const [setupEmail, setSetupEmail] = useState('');
   const [setupPassword, setSetupPassword] = useState('');
   const [setupConfirmPassword, setSetupConfirmPassword] = useState('');
+  const [setupComplianceProfile, setSetupComplianceProfile] = useState(emptyComplianceProfile);
 
   // Main UI State
   const [activeTab, setActiveTab] = useState(initialTab); // 'ledger' (Dashboard), 'report' (Till slip), 'admin' (Admin Ledger)
@@ -280,7 +281,8 @@ export default function App() {
           phone: setupPhone,
           email: setupEmail,
           password: setupPassword,
-          confirmPassword: setupConfirmPassword
+          confirmPassword: setupConfirmPassword,
+          complianceProfile: setupComplianceProfile
         })
       });
 
@@ -722,6 +724,9 @@ export default function App() {
               />
             </div>
 
+            <details className="compliance-profile"><summary>Business compliance details (optional)</summary>
+              <ComplianceProfileFields profile={setupComplianceProfile} onChange={setSetupComplianceProfile} brief disabled={loading} />
+            </details>
             <button type="submit" className="btn btn-primary" disabled={loading || !online}>
               {loading ? <div className="loading-spinner" style={{ borderColor: 'var(--color-indigo-ink)' }} /> : 'Register & Sync'}
             </button>
@@ -770,6 +775,7 @@ export default function App() {
       />
 
       <div className="nav-tabs">
+        <button className={`nav-tab ${activeTab === 'compliance' ? 'active' : ''}`} onClick={() => setActiveTab('compliance')}>Compliance</button>
         <button
           className={`nav-tab ${activeTab === 'ledger' ? 'active' : ''}`}
           onClick={() => setActiveTab('ledger')}
@@ -805,10 +811,12 @@ export default function App() {
       <div className="content">
         {error && <div className="error-message">{error}</div>}
         {success && <div className="success-message">{success}</div>}
+        {activeTab === 'compliance' && <ComplianceCheck key={business.id} business={business} />}
 
         {activeTab === 'ledger' && (
           <>
             <InstallPrompt />
+            <button className="compliance-dashboard-link" onClick={() => setActiveTab('compliance')}>Check your tax & business obligations → Complete your business profile</button>
 
             {(!business.county || business.kraPin === 'unknown' || !business.kraPin) && (
               <button

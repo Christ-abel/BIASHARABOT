@@ -14,8 +14,11 @@ npm run lint     # oxlint
 npm run icons    # regenerate public/icons/* from scripts/generate-icons.mjs
 ```
 
-`VITE_API_BASE` overrides the backend URL (defaults to the deployed Render
-service). It is baked in at build time and is also what queued uploads use.
+`VITE_API_BASE` overrides the backend URL. Development defaults to
+`http://localhost:5000/api`; production builds default to the deployed Render
+service. The URL is baked in at build time and is also what queued uploads use.
+Restart Vite after changing an environment override. Start the local backend
+from the repository root with `npm run dev:backend` when testing development.
 
 ## How offline works
 

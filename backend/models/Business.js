@@ -9,6 +9,7 @@ const businessSchema = new mongoose.Schema({
   phone: { type: String, required: true },
   email: { type: String, required: true },
   password: { type: String, required: true },
+  complianceProfile: { type: complianceSchema, default: () => ({}) },
   tillNumber: { type: String, default: () => process.env.PAYHERO_CHANNEL_ID || '6669' },
   // Missing on old records → mongoose (and normalizeReportLanguage) treat as en.
   reportLanguage: {

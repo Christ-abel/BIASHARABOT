@@ -3,6 +3,7 @@ import cors from 'cors';
 import multer from 'multer';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'node:url';
 import Entry from './models/Entry.js';
 import Business from './models/Business.js';
 import Stock from './models/Stock.js';
@@ -27,8 +28,12 @@ import {
   saveEntryIdempotently
 } from './offline-sync.js';
 import bcrypt from 'bcryptjs';
+import { complianceRouter, startComplianceWorker } from './compliance-api.js';
+import { validateProfile } from './compliance.js';
 
-dotenv.config();
+// Resolve configuration relative to this file, independent of the launch directory.
+// Hosted environment variables win over backend/.env.
+dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -36,6 +41,13 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json());
+app.use('/api', (_req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({ error: 'Database unavailable. Please try again shortly.' });
+  }
+  next();
+});
+app.use('/api/compliance', complianceRouter);
 
 // Memory storage for audio and receipt uploads (prevents disk clutter)
 const upload = multer({ storage: multer.memoryStorage() });
@@ -67,17 +79,12 @@ function acceptReceiptFile(req, res, next) {
 }
 
 // MongoDB Connection
-const mongoURI = process.env.MONGODB_URI;
+const mongoURI = process.env.MONGODB_URI?.trim();
 if (!mongoURI) {
-  console.error("CRITICAL ERROR: MONGODB_URI environment variable is not defined in .env file.");
-} else {
-  mongoose.connect(mongoURI)
-    .then(() => console.log("Connected successfully to MongoDB Atlas."))
-    .catch(err => {
-      console.error("MongoDB connection error:", err);
-      console.log("Ensure your IP address is whitelisted in MongoDB Atlas and the credentials in MONGODB_URI are correct.");
-    });
+  console.error('MONGODB_URI is missing. Configure backend/.env or a hosted environment variable.');
+  process.exit(1);
 }
+mongoose.set('bufferCommands', false);
 
 // 1. Text Entry Endpoint
 app.post('/api/entries/text', async (req, res) => {
@@ -506,7 +513,7 @@ app.post('/api/business', async (req, res) => {
 // 9. Fetch Business Details Endpoint
 app.get('/api/business/:id', async (req, res) => {
   try {
-    const business = await Business.findOne({ id: req.params.id }).select('-password');
+    const business = await Business.findOne({ id: req.params.id }).select('-password -complianceProfile');
     if (!business) {
       return res.status(404).json({ error: "Business not found" });
     }
