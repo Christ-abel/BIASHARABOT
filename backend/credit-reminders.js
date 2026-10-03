@@ -7,7 +7,7 @@
 import Business from './models/Business.js';
 import Entry from './models/Entry.js';
 import { normalizeReportLanguage } from './languages.js';
-import { sendSMS } from './sms.js';
+import { sendSMS } from './services/sms.js';
 
 export const CREDIT_REMINDER_GAP_MS = 3 * 24 * 60 * 60 * 1000;
 
