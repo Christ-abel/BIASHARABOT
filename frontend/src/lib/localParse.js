@@ -118,7 +118,7 @@ export function parseTransactionsLocally(text) {
     if (!Number.isFinite(unit) || unit <= 0) return;
     items.push({
       type,
-      item: titleCase(nameParts.join(' ')),
+      item: titleCase(nameParts.join(' ')).replace(/^(yakari|yahari|yakary)$/i, 'Sukari'),
       qty,
       unit_price: unit,
       total: round2(qty * unit),

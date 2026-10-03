@@ -51,7 +51,7 @@ describe('report language', () => {
     assert.equal(called, 0);
     assert.equal(resolved.fallback, false);
     assert.equal(resolved.language, 'sw');
-    assert.equal(resolved.labels.netProfit, 'FAIDA HALISI');
+    assert.equal(resolved.labels.netProfit, 'PESA WIKI HII');
     assert.equal(resolved.labels.revenue, 'MAUZO');
   });
 

@@ -167,6 +167,7 @@ export function buildReportMessage({
   mpesa_fees,
   net_profit,
   outstanding_credit,
+  stock_on_shelf,
   itemProfitLines
 }) {
   const copy = labels || REPORT_LABELS.en;
@@ -188,6 +189,7 @@ export function buildReportMessage({
     `${copy.mpesaFees}: ${formatKesAmount(mpesa_fees)}\n` +
     `---------------------\n` +
     `${copy.netProfit}: ${formatKesAmount(net_profit)}\n` +
+    (Number(stock_on_shelf) > 0 ? `${copy.shelfStock}: ${formatKesAmount(stock_on_shelf)}\n` : '') +
     profitBlock +
     `${copy.outstandingCredit}: ${formatKesAmount(outstanding_credit)}\n` +
     `---------------------\n` +

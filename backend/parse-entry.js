@@ -77,6 +77,15 @@ function parseNumberToken(raw) {
   return null;
 }
 
+/** Gemini often hears sukari as yakari, or invents "New Year's curry". */
+export function correctShopItemName(name) {
+  const raw = String(name || '').trim();
+  const key = raw.toLowerCase().replace(/[^a-z0-9\s']/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^(yakari|yahari|yakary|sukary|zakari)$/.test(key)) return 'Sukari';
+  if (/new year'?s?\s+curry/.test(key) || key === 'curry') return 'Sukari';
+  return raw;
+}
+
 function titleCase(name) {
   return String(name || '')
     .split(/\s+/)
@@ -140,7 +149,7 @@ function tokenize(text) {
 }
 
 function flushItem(items, nameParts, qty, price, type) {
-  const item = titleCase(nameParts.join(' '));
+    const item = correctShopItemName(titleCase(nameParts.join(' ')));
   const unit = round2(price);
   const count = Number.isFinite(qty) && qty > 0 ? qty : 1;
   if (!Number.isFinite(unit) || unit <= 0) return;
@@ -277,7 +286,7 @@ export function coerceParsedEntries(parsed, originalText = '', language = 'en') 
     const safeUnit = Number.isFinite(unit) ? unit : (Number.isFinite(total) ? total / safeQty : NaN);
     const safeTotal = Number.isFinite(total) ? total : round2(safeQty * safeUnit);
     if (!Number.isFinite(safeTotal) || safeTotal <= 0 || !Number.isFinite(safeUnit)) continue;
-    const item = String(row.item || '').trim() || 'Sale';
+    const item = correctShopItemName(String(row.item || '').trim() || 'Sale');
     const entry = {
       type,
       item,

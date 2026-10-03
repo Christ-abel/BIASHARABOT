@@ -30,7 +30,7 @@ export const ITEM_FAMILIES = {
   bread: ['bread', 'loaf', 'loaves', 'mkate'],
   milk: ['milk', 'maziwa', 'milk packet', 'milk packets'],
   eggs: ['eggs', 'egg', 'mayai'],
-  sugar: ['sugar', 'sukari'],
+  sugar: ['sugar', 'sukari', 'yakari', 'yahari', 'yakary', 'sukary'],
   salt: ['salt', 'chumvi'],
   tea: ['tea', 'chai', 'tea leaves'],
   oil: ['oil', 'cooking oil', 'mafuta', 'fat'],

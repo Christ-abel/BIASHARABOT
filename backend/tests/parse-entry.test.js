@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {
   attachPhrases,
   coerceParsedEntries,
+  correctShopItemName,
   parseShopTalk,
   peelCreditParty,
   phraseEntry
 } from '../parse-entry.js';
+import { detectCancelCommand } from '../cancel-entry.js';
 
 describe('Kenyan shop-talk parser', () => {
   it('splits Ugali twenty bob and nyama thirty bob into two sales', () => {
@@ -91,6 +93,21 @@ describe('Kenyan shop-talk parser', () => {
       customer_name: 'Mama'
     }, 'en');
     assert.equal(en, 'Sugar on credit for Mama, KSh 50');
+  });
+
+  it('rewrites yakari and New Year curry to Sukari', () => {
+    assert.equal(correctShopItemName('yakari'), 'Sukari');
+    assert.equal(correctShopItemName("New Year's curry"), 'Sukari');
+    const [row] = parseShopTalk('yakari 50');
+    assert.equal(row.item, 'Sukari');
+    assert.equal(row.unit_price, 50);
+  });
+
+  it('treats cancel that and cancel yakari as undo, not a sale', () => {
+    assert.deepEqual(detectCancelCommand('cancel that'), { cancel: true, item: '' });
+    assert.deepEqual(detectCancelCommand('cancel yakari'), { cancel: true, item: 'yakari' });
+    assert.deepEqual(detectCancelCommand('futa hiyo'), { cancel: true, item: '' });
+    assert.equal(detectCancelCommand('sukari 50'), null);
   });
 
   it('accepts a Gemini-style items array', () => {

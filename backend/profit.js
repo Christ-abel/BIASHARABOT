@@ -187,6 +187,55 @@ export function groupSoldProducts(sales = []) {
 }
 
 /**
+ * Goods still in the shop after this period's sales.
+ * Bought 15 sugar and sold 2 → 13 remain. That cash is on the shelf,
+ * not a sales loss.
+ */
+export function estimateShelf(entries = [], stockLots = []) {
+  const list = Array.isArray(entries) ? entries : [];
+  const lots = Array.isArray(stockLots) ? stockLots : [];
+  const bought = new Map();
+
+  for (const row of list.filter((entry) => entry.type === 'purchase')) {
+    const family = itemFamily(row.item);
+    if (!family) continue;
+    const pieces = resolveSaleCost(row.item, lots)?.pieces_per_pack
+      || (Number(row.pieces_per_pack) > 0 ? Number(row.pieces_per_pack) : 1);
+    const packs = Number(row.qty) || 0;
+    const money = Number(row.total) || 0;
+    const existing = bought.get(family) || { item: row.item, sale_pieces: 0, money: 0 };
+    existing.sale_pieces += packs * pieces;
+    existing.money += money;
+    bought.set(family, existing);
+  }
+
+  const sold = new Map();
+  for (const row of list.filter((entry) => entry.type === 'sale')) {
+    const family = itemFamily(row.item);
+    if (!family) continue;
+    sold.set(family, (sold.get(family) || 0) + (Number(row.qty) || 0));
+  }
+
+  const items = [];
+  let value = 0;
+  for (const [family, row] of bought) {
+    const remaining = Math.max(0, row.sale_pieces - (sold.get(family) || 0));
+    if (remaining <= 0 || row.sale_pieces <= 0) continue;
+    const unit = row.money / row.sale_pieces;
+    const line = roundMoney(remaining * unit);
+    value += line;
+    items.push({
+      item: row.item,
+      qty: remaining,
+      unit_cost: roundMoney(unit),
+      value: line
+    });
+  }
+
+  return { value: roundMoney(value), items };
+}
+
+/**
  * Full weekly report object. Cash-basis fields keep the same formula the
  * dashboard and SMS have always used; the new fields sit beside them.
  */
@@ -213,12 +262,16 @@ export function buildWeeklyReport(entries = [], stockLots = []) {
     .filter((row) => row.cost_unknown)
     .reduce((sum, row) => sum + row.revenue, 0);
 
+  const shelf = estimateShelf(list, lots);
+
   return {
     revenue,
     cost_of_goods,
     other_expenses,
     mpesa_fees,
     net_profit,
+    stock_on_shelf: shelf.value,
+    shelf_items: shelf.items,
     outstanding_credit,
     sold_items,
     item_profits,

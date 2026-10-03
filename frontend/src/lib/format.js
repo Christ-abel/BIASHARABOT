@@ -1,11 +1,18 @@
 /** Shared display helpers for amounts and "when did this happen" labels. */
 
-export const formatKsh = (amount) =>
-  `KSh ${Number(amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 })}`;
+export const formatKsh = (amount) => {
+  if (amount == null || amount === '') return '—';
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return '—';
+  return `KSh ${n.toLocaleString('en-KE', { maximumFractionDigits: 2 })}`;
+};
 
-/** "30%" — returns an em dash when margin is unknown (no stock cost yet). */
-export const formatPercent = (value) =>
-  Number.isFinite(Number(value)) ? `${Math.round(Number(value))}%` : '—';
+/** "30%" — dash when margin is unknown. null must not become 0%. */
+export const formatPercent = (value) => {
+  if (value == null || value === '') return '—';
+  const n = Number(value);
+  return Number.isFinite(n) ? `${Math.round(n)}%` : '—';
+};
 
 /** Short relative time, e.g. "just now", "4 min ago", "yesterday 18:40". */
 export function timeAgo(iso) {

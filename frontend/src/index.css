@@ -946,6 +946,21 @@ header p {
   font-weight: 600;
   margin-bottom: 16px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-undo {
+  border: none;
+  background: var(--color-indigo-ink);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .error-message {

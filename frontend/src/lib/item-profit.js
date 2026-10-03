@@ -11,7 +11,7 @@ const FAMILIES = {
   sukuma: ['sukuma', 'sukuma wiki', 'kale'],
   bread: ['bread', 'loaf', 'loaves', 'mkate'],
   milk: ['milk', 'maziwa'],
-  sugar: ['sugar', 'sukari'],
+  sugar: ['sugar', 'sukari', 'yakari', 'yahari', 'yakary'],
   oil: ['oil', 'cooking oil', 'mafuta'],
   rice: ['rice', 'mchele'],
   chapati: ['chapati', 'chapatti'],

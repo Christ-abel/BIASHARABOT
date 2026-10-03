@@ -145,6 +145,7 @@ export default function App() {
   const [stkPhone, setStkPhone] = useState('');
   const [stkLoading, setStkLoading] = useState(false);
   const [settlingCreditId, setSettlingCreditId] = useState(null);
+  const [lastLoggedIds, setLastLoggedIds] = useState([]);
 
   // Weekly Report State
   const [report, setReport] = useState(null);
@@ -416,6 +417,44 @@ export default function App() {
     );
   };
 
+  const applyLoggedResult = (payload) => {
+    if (payload?.cancelled) {
+      setLastLoggedIds([]);
+      setSuccess(payload.message || 'Cancelled. Tap the mic and say it again.');
+      fetchEntries();
+      return;
+    }
+    const rows = Array.isArray(payload?.entries) && payload.entries.length ? payload.entries : [payload];
+    setLastLoggedIds(rows.map((row) => row?._id).filter(Boolean));
+    setSuccess(describeLogged(payload));
+    fetchEntries();
+  };
+
+  const handleUndoLast = async () => {
+    if (!lastLoggedIds.length) return;
+    if (isOffline()) {
+      setError('Undo needs network. Say “cancel that” when you are online.');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/entries/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessId: business.id, ids: lastLoggedIds })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error || 'Could not undo that entry');
+        return;
+      }
+      setLastLoggedIds([]);
+      setSuccess(data.message || 'Cancelled. Tap the mic and say sukari with the price.');
+      fetchEntries();
+    } catch {
+      setError('Could not undo that entry');
+    }
+  };
+
   // Handle Text Logging
   const handleTextSubmit = async (e) => {
     e.preventDefault();
@@ -449,8 +488,10 @@ export default function App() {
       if (response.ok) {
         const newEntry = await response.json();
         setTextEntry('');
-        setSuccess(describeLogged(newEntry));
-        fetchEntries();
+        applyLoggedResult(newEntry);
+      } else if (response.status === 404) {
+        const errData = await response.json();
+        setError(errData.error || 'Nothing to cancel');
       } else if (response.status >= 500) {
         // Server reachable but broken — queue rather than lose the sale.
         await queueTextEntry(textEntry);
@@ -556,8 +597,10 @@ export default function App() {
 
       if (response.ok) {
         const newEntry = await response.json();
-        setSuccess(describeLogged(newEntry));
-        fetchEntries();
+        applyLoggedResult(newEntry);
+      } else if (response.status === 404) {
+        const errData = await response.json();
+        setError(errData.error || 'Nothing to cancel');
       } else if (response.status >= 500) {
         await queueVoiceEntry(audioBlob, durationSec);
       } else {
@@ -766,6 +809,12 @@ export default function App() {
   const outstandingCredits = entries
     .filter((row) => row.type === 'credit' && !row.matched)
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const cashThisWeek = report
+    ? Number(report.revenue || 0)
+      - Number(report.cost_of_goods || 0)
+      - Number(report.other_expenses || 0)
+      - Number(report.mpesa_fees || 0)
+    : 0;
 
   // Unmatched entries list for webhook simulator dropdown
   const unmatchedSales = entries.filter((e) => e.type === 'sale' && !e.matched && e.source !== 'payhero');
@@ -975,7 +1024,16 @@ export default function App() {
 
       <div className="content">
         {error && <div className="error-message">{error}</div>}
-        {success && <div className="success-message">{success}</div>}
+        {success && (
+          <div className="success-message">
+            <span>{success}</span>
+            {lastLoggedIds.length > 0 && (
+              <button type="button" className="btn-undo" onClick={handleUndoLast}>
+                Undo — say it again
+              </button>
+            )}
+          </div>
+        )}
 
         {activeTab === 'ledger' && (
           <>
@@ -1082,7 +1140,7 @@ export default function App() {
             <div className="logger-card torn-divider-bottom">
               <h3>Log New Transaction</h3>
               <p style={{ fontSize: '13px', color: '#5A524E', marginBottom: '16px' }}>
-                Hold the phone close and speak each item with its price, for example: “Ugali twenty bob, nyama thirty bob”. To lend: “kopesha mama sugar fifty 0712…”. After 3 days we SMS them to pay so you can restock. Or type the same below.
+                Hold the phone close and speak each item with its price, for example: “Ugali twenty bob, nyama thirty bob”. If it hears yakari instead of sukari, tap Undo or say “cancel that”, then say sukari again. To lend: “kopesha mama sugar fifty 0712…”.
               </p>
 
               {!online && (
@@ -1278,30 +1336,43 @@ export default function App() {
                   </div>
 
                   <div className="receipt-row">
-                    <span className="label">{reportLabels?.costOfGoods || 'COST OF GOODS (PURCHASES)'}</span>
-                    <span className="value mono">KSh {report.cost_of_goods.toFixed(2)}</span>
+                    <span className="label">{reportLabels?.costOfGoods || 'STOCK BOUGHT THIS WEEK'}</span>
+                    <span className="value mono">KSh {Number(report.cost_of_goods || 0).toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span className="label">{reportLabels?.otherExpenses || 'OTHER EXPENSES'}</span>
-                    <span className="value mono">KSh {report.other_expenses.toFixed(2)}</span>
+                    <span className="value mono">KSh {Number(report.other_expenses || 0).toFixed(2)}</span>
                   </div>
 
                   <div className="receipt-row">
                     <span className="label">{reportLabels?.mpesaFees || 'M-PESA CHARGES (PAYHERO)'}</span>
-                    <span className="value mono">KSh {report.mpesa_fees.toFixed(2)}</span>
+                    <span className="value mono">KSh {Number(report.mpesa_fees || 0).toFixed(2)}</span>
                   </div>
+
+                  {Number(report.stock_on_shelf) > 0 && (
+                    <div className="receipt-row">
+                      <span className="label">{reportLabels?.shelfStock || 'STILL ON THE SHELF'}</span>
+                      <span className="value mono">KSh {Number(report.stock_on_shelf).toFixed(2)}</span>
+                    </div>
+                  )}
 
                   <div className="dotted-rule" />
 
                   <div
                     className={`receipt-row total-row ${
-                      report.net_profit >= 0 ? 'positive' : 'negative'
+                      cashThisWeek >= 0 ? 'positive' : 'negative'
                     }`}
                   >
-                    <span className="label">{reportLabels?.netProfit || 'NET PROFIT'}</span>
-                    <span className="value mono">KSh {report.net_profit.toFixed(2)}</span>
+                    <span className="label">{reportLabels?.netProfit || 'CASH THIS WEEK'}</span>
+                    <span className="value mono">KSh {cashThisWeek.toFixed(2)}</span>
                   </div>
+                  {cashThisWeek < 0 && Number(report.stock_on_shelf) > 0 && (
+                    <p className="receipt-section-note">
+                      {reportLabels?.restockNote ||
+                        'Negative cash means you restocked. That money is still in the shop, not a sales loss.'}
+                    </p>
+                  )}
 
                   <div className="dotted-rule" />
 
@@ -1326,7 +1397,11 @@ export default function App() {
                                 row.pieces_per_pack > 1 && row.pack_cost
                                   ? ` (${formatKsh(row.pack_cost)}/${reportLabels?.pack || 'pack'} ÷ ${row.pieces_per_pack})`
                                   : ''
-                              } · ${reportLabels?.grossProfit || 'profit'} ${formatKsh(row.gross_profit)} (${formatPercent(row.margin)})`}
+                              } · ${
+                                Number(row.margin) === 0
+                                  ? (reportLabels?.soldAtCost || 'sold at cost — no markup')
+                                  : `${reportLabels?.grossProfit || 'profit'} ${formatKsh(row.gross_profit)} (${formatPercent(row.margin)})`
+                              }`}
                         </div>
                       </div>
                     ))

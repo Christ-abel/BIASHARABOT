@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildWeeklyReport,
   computeItemProfits,
+  estimateShelf,
   formatItemProfitSms,
   groupSoldProducts,
   normalizeItemName,
@@ -152,6 +153,26 @@ describe('item-level gross profit', () => {
     assert.equal(rows[0].unit_price, 200);
     assert.equal(rows[0].total, 600);
     assert.equal(buildWeeklyReport([sale('Sugar 2kg', 3, 200)]).sold_items[0].total, 600);
+  });
+
+  it('does not treat restocked sugar still on the shelf as a sales loss', () => {
+    const entries = [
+      purchase('sugar', 15, 140, { source: 'stock' }),
+      sale('sukari', 1, 140),
+      sale('sukari', 1, 140),
+      sale("New Year's curry", 1, 140)
+    ];
+    const lots = [lot('sugar', 15, 140)];
+    const report = buildWeeklyReport(entries, lots);
+    const shelf = estimateShelf(entries, lots);
+
+    assert.equal(report.revenue, 420);
+    assert.equal(report.cost_of_goods, 2100);
+    assert.equal(report.net_profit, -1680);
+    assert.equal(report.net_profit, report.revenue - report.cost_of_goods);
+    assert.equal(report.item_profits.find((row) => row.item === 'sukari').gross_profit, 0);
+    assert.equal(shelf.value, 1820);
+    assert.equal(report.stock_on_shelf, 1820);
   });
 
   it('formats a compact SMS addendum with overall and top item margins', () => {

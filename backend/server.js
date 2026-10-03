@@ -23,6 +23,7 @@ import ComplianceNotice from './models/ComplianceNotice.js';
 import { triggerSTKPush } from './payments.js';
 import { sendSMS } from './sms.js';
 import { runCreditReminders } from './credit-reminders.js';
+import { cancelLastLogged, detectCancelCommand } from './cancel-entry.js';
 import {
   findByClientId,
   reconcileOfflineSale,
@@ -141,6 +142,36 @@ async function persistParsedItems({ parsed, businessId, source, clientId, occurr
   }
 
   const spoken = parsed?.transcription || fallbackText || '';
+  const cancel = parsed?.cancel || detectCancelCommand(spoken);
+  if (cancel) {
+    const result = await cancelLastLogged({
+      businessId: businessId || 'demo-shop',
+      itemName: cancel.item || parsed?.item
+    });
+    if (!result.cancelled.length) {
+      return {
+        status: 404,
+        body: {
+          cancelled: true,
+          entries: [],
+          error: result.missing
+            ? `Nothing called ${result.missing} to cancel. Say the last item, or tap Undo.`
+            : 'Nothing recent to cancel. Record the sale first, then say cancel that if it is wrong.'
+        }
+      };
+    }
+    const names = result.cancelled.map((row) => row.item).join(', ');
+    return {
+      status: 200,
+      body: {
+        cancelled: true,
+        entries: result.cancelled,
+        count: result.cancelled.length,
+        message: `Cancelled ${names}. Tap the mic and say it again — sukari, not yakari.`
+      }
+    };
+  }
+
   const items = coerceParsedEntries(parsed, spoken, language);
   if (!items.length) {
     console.warn('[BAD PARSE] no priced items:', parsed);
@@ -289,6 +320,34 @@ app.post('/api/entries/:id/settle', async (req, res) => {
   } catch (error) {
     console.error('Settle credit error:', error);
     res.status(500).json({ error: 'Failed to mark that debt as paid' });
+  }
+});
+
+// Undo a misheard voice line ("cancel that" / "cancel yakari").
+app.post('/api/entries/cancel', async (req, res) => {
+  try {
+    const { businessId, item, ids } = req.body || {};
+    const result = await cancelLastLogged({
+      businessId: businessId || 'demo-shop',
+      itemName: item,
+      ids
+    });
+    if (!result.cancelled.length) {
+      return res.status(404).json({
+        cancelled: true,
+        error: 'Nothing recent to cancel. Record first, then undo if the name is wrong.'
+      });
+    }
+    const names = result.cancelled.map((row) => row.item).join(', ');
+    res.json({
+      cancelled: true,
+      entries: result.cancelled,
+      count: result.cancelled.length,
+      message: `Cancelled ${names}. Tap the mic and say it again.`
+    });
+  } catch (error) {
+    console.error('Cancel entry error:', error);
+    res.status(500).json({ error: 'Could not cancel that entry' });
   }
 });
 

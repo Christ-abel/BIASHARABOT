@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { detectCancelCommand } from './cancel-entry.js';
 import { attachPhrases, coerceParsedEntries, parseShopTalk } from './parse-entry.js';
 import { normalizeReportLanguage } from './languages.js';
 
@@ -101,6 +102,7 @@ Return JSON only:
 Rules:
 - One spoken or typed line can list SEVERAL products. "Ugali twenty bob, nyama thirty bob" is TWO sales: Ugali qty 1 at 20, Nyama qty 1 at 30.
 - Keep the product name the owner said (Ugali, nyama, sukari). Do not rename ugali to maize flour.
+- Sukari (sugar) is often mumbled as yakari. Write Sukari, never "yakari" or "New Year's curry".
 - Default type is sale unless they said bought/nunua (purchase), rent/stima (expense), or deni/credit/kopesha (credit).
 - Credit lines often name the customer and their phone: "kopesha mama sugar 50 0712345678" is Sugar qty 1 at 50, customer_name Mama, customer_phone 0712345678. Never use the phone as the price.
 - qty defaults to 1 when they only name a price. total = qty × unit_price.
@@ -128,6 +130,9 @@ function finalizeEntries(parsed, originalText, language) {
 
 export async function parseTextWithGemini(text, options = {}) {
   const language = normalizeReportLanguage(options.language);
+  const cancel = detectCancelCommand(text);
+  if (cancel) return { cancel: true, item: cancel.item, transcription: text, items: [] };
+
   const local = attachPhrases(parseShopTalk(text), language, text);
   const localClean = coerceParsedEntries({ items: local }, text, language);
 
@@ -191,6 +196,9 @@ export async function parseAudioWithGemini(audioBuffer, mimeType, options = {}) 
   }
 
   const spoken = String(parsed.transcription || '').trim();
+  const cancel = detectCancelCommand(spoken);
+  if (cancel) return { cancel: true, item: cancel.item, transcription: spoken, items: [] };
+
   const items = finalizeEntries(parsed, spoken, language);
   if (!items.length) {
     return {
