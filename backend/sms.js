@@ -34,6 +34,7 @@ export async function sendSMS({ to, message }) {
   try {
     const response = await fetch(smsUrl, {
       method: "POST",
+      signal: AbortSignal.timeout(15_000),
       headers: smsHeaders,
       body: JSON.stringify(smsBody)
     });
