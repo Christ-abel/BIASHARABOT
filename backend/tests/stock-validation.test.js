@@ -15,6 +15,18 @@ describe('manual stock entry validation', () => {
     assert.equal(result.item.qty, 12);
     assert.equal(result.item.unit_cost, 250);
     assert.equal(result.item.total, 3000);
+    assert.equal(result.item.pieces_per_pack, 1);
+  });
+
+  it('keeps how many pieces a bought pack is sold as', () => {
+    const result = validateStockItem({
+      item: 'Bar Soap',
+      qty: 10,
+      unit_cost: 80,
+      pieces_per_pack: 4
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.item.pieces_per_pack, 4);
   });
 
   it('rejects a blank item name', () => {

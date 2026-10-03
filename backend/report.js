@@ -113,11 +113,20 @@ export function formatItemProfitLines(report, labels, limit = 4) {
 
   const lines = [`${labels.grossProfit}: ${formatKesAmount(report.gross_profit)}${marginBit}`];
 
-  const priced = (report.item_profits || []).filter((row) => !row.cost_unknown);
-  for (const row of priced.slice(0, limit)) {
+  const rows = report.item_profits || [];
+  for (const row of rows.slice(0, limit)) {
+    const soldBit = Number.isFinite(Number(row.unit_price))
+      ? `${labels.soldAt || 'sold at'} ${formatKesAmount(row.unit_price)}`
+      : Number.isFinite(Number(row.revenue))
+        ? `${labels.rev || 'rev'} ${formatKesAmount(row.revenue)}`
+        : '';
+    if (row.cost_unknown) {
+      lines.push(`  ${row.item}${soldBit ? `: ${soldBit}` : ''}`);
+      continue;
+    }
     const rowMargin = Number.isFinite(row.margin) ? ` (${row.margin.toFixed(0)}%)` : '';
-    // Item names stay exactly as the owner recorded them.
-    lines.push(`  ${row.item}: ${formatKesAmount(row.gross_profit)}${rowMargin}`);
+    const prefix = soldBit ? `${soldBit} · ` : '';
+    lines.push(`  ${row.item}: ${prefix}${formatKesAmount(row.gross_profit)}${rowMargin}`);
   }
 
   if (report.items_missing_cost > 0) {

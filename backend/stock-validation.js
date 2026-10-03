@@ -90,12 +90,19 @@ export function validateStockItem(raw) {
     };
   }
 
+  let pieces = coerceNumber(raw?.pieces_per_pack);
+  if (!Number.isFinite(pieces) || pieces <= 0) pieces = 1;
+  if (pieces > 10000) {
+    return { ok: false, error: `Pieces per pack for "${item}" is too large` };
+  }
+
   return {
     ok: true,
     item: {
       item,
       qty,
       unit_cost: roundMoney(unitCost),
+      pieces_per_pack: roundMoney(pieces),
       total: roundMoney(total)
     }
   };

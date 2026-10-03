@@ -991,10 +991,14 @@ export default function App() {
                         <strong>{row.item}</strong>
                         <span>{row.qty} × {formatKsh(row.unit_price)}</span>
                         {row.cost_unknown ? (
-                          <span className="profit-missing">No stock cost yet — upload the receipt or type the purchase.</span>
+                          <span className="profit-missing">Sold at {formatKsh(row.unit_price)} — add the pack you bought to see profit.</span>
                         ) : (
                           <span className={row.gross_profit >= 0 ? 'profit-positive-text' : 'profit-negative-text'}>
-                            Bought at {formatKsh(row.unit_cost)} · profit {formatKsh(row.gross_profit)}
+                            Sold at {formatKsh(row.unit_price)} · cost {formatKsh(row.unit_cost)}
+                            {row.pieces_per_pack > 1 && row.pack_cost
+                              ? ` (${formatKsh(row.pack_cost)} pack ÷ ${row.pieces_per_pack} pieces)`
+                              : ''}
+                            {' '}· profit {formatKsh(row.gross_profit)}
                             {Number.isFinite(row.margin) ? ` (${formatPercent(row.margin)})` : ''}
                           </span>
                         )}
@@ -1242,17 +1246,17 @@ export default function App() {
                       <div className="receipt-item-profit" key={row.item}>
                         <div className="receipt-row">
                           <span className="label">{row.item.toUpperCase()}</span>
-                          <span className="value mono">
-                            {row.cost_unknown
-                              ? (reportLabels?.noCostYet || 'NO COST YET')
-                              : `KSh ${Number(row.gross_profit).toFixed(2)}`}
-                          </span>
+                          <span className="value mono">{formatKsh(row.revenue)}</span>
                         </div>
                         <div className="receipt-item-meta">
-                          {row.qty_sold} {reportLabels?.sold || 'sold'} · {reportLabels?.rev || 'rev'} {formatKsh(row.revenue)}
+                          {row.qty_sold} × {formatKsh(row.unit_price || (row.qty_sold ? row.revenue / row.qty_sold : row.revenue))} {reportLabels?.sold || 'sold'}
                           {row.cost_unknown
-                            ? ` · ${reportLabels?.addStockForMargin || 'add stock to see margin'}`
-                            : ` · ${reportLabels?.cost || 'cost'} ${formatKsh(row.cogs)} · ${formatPercent(row.margin)}`}
+                            ? ` · ${reportLabels?.addStockForMargin || 'add the pack you bought to see profit'}`
+                            : ` · ${reportLabels?.cost || 'cost'} ${formatKsh(row.unit_cost)}/${reportLabels?.piece || 'piece'}${
+                                row.pieces_per_pack > 1 && row.pack_cost
+                                  ? ` (${formatKsh(row.pack_cost)}/${reportLabels?.pack || 'pack'} ÷ ${row.pieces_per_pack})`
+                                  : ''
+                              } · ${reportLabels?.grossProfit || 'profit'} ${formatKsh(row.gross_profit)} (${formatPercent(row.margin)})`}
                         </div>
                       </div>
                     ))

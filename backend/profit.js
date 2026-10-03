@@ -22,33 +22,55 @@ export { normalizeItemName, itemFamily } from './item-names.js';
 /** Shortest token we will use for a fuzzy item-name match. "oil" is fine; "a" is not. */
 const FUZZY_MIN_LENGTH = 3;
 
-function weightedAverageCost(lots) {
-  let costSum = 0;
-  let qtySum = 0;
+function piecesPerPack(lot) {
+  const pieces = Number(lot?.pieces_per_pack);
+  return Number.isFinite(pieces) && pieces > 0 ? pieces : 1;
+}
+
+/**
+ * Cost of one *sold* piece. A bar bought at 80 that becomes 4 pieces
+ * costs 20 each. Weighting is by sale pieces, not by wholesale packs.
+ */
+function weightedSaleUnitCost(lots) {
+  let money = 0;
+  let salePieces = 0;
+  let packCostSum = 0;
+  let packQty = 0;
+  let piecesHint = 1;
+  let stockItem = '';
   for (const lot of lots) {
-    const qty = Number(lot.qty) || 0;
-    const cost = Number(lot.unit_cost);
-    if (qty <= 0 || !Number.isFinite(cost) || cost < 0) continue;
-    costSum += qty * cost;
-    qtySum += qty;
+    const packs = Number(lot.qty) || 0;
+    const packCost = Number(lot.unit_cost);
+    const pieces = piecesPerPack(lot);
+    if (packs <= 0 || !Number.isFinite(packCost) || packCost < 0) continue;
+    money += packs * packCost;
+    salePieces += packs * pieces;
+    packCostSum += packs * packCost;
+    packQty += packs;
+    piecesHint = pieces;
+    stockItem = lot.item || stockItem;
   }
-  if (qtySum <= 0) return null;
-  return roundMoney(costSum / qtySum);
+  if (salePieces <= 0) return null;
+  return {
+    unit_cost: roundMoney(money / salePieces),
+    pack_cost: packQty > 0 ? roundMoney(packCostSum / packQty) : null,
+    pieces_per_pack: piecesHint,
+    stock_item: stockItem
+  };
 }
 
 /**
  * Resolve a unit cost for a sold item against recorded stock lots.
- * Exact normalized name wins; otherwise a contains-match either way
- * ("sugar" ↔ "Sugar 2kg") as long as the shorter name is long enough
- * that we are not matching on a single letter.
+ * Exact / family name wins; "soap" matches "Bar Soap". Cost is per
+ * piece the owner sells, not per wholesale pack.
  */
-export function resolveUnitCost(itemName, stockLots) {
+export function resolveSaleCost(itemName, stockLots) {
   const key = normalizeItemName(itemName);
   if (!key || !Array.isArray(stockLots) || !stockLots.length) return null;
 
   const family = itemFamily(itemName);
   const familyMatch = stockLots.filter((lot) => itemFamily(lot.item) === family);
-  if (familyMatch.length) return weightedAverageCost(familyMatch);
+  if (familyMatch.length) return weightedSaleUnitCost(familyMatch);
 
   const fuzzy = stockLots.filter((lot) => {
     const lotKey = normalizeItemName(lot.item);
@@ -58,7 +80,12 @@ export function resolveUnitCost(itemName, stockLots) {
     return shorter.length >= FUZZY_MIN_LENGTH && longer.includes(shorter);
   });
 
-  return fuzzy.length ? weightedAverageCost(fuzzy) : null;
+  return fuzzy.length ? weightedSaleUnitCost(fuzzy) : null;
+}
+
+export function resolveUnitCost(itemName, stockLots) {
+  const resolved = resolveSaleCost(itemName, stockLots);
+  return resolved ? resolved.unit_cost : null;
 }
 
 function sumBy(entries, predicate) {
@@ -90,16 +117,21 @@ export function computeItemProfits(sales, stockLots) {
 
   const rows = [];
   for (const group of groups.values()) {
-    const unitCost = resolveUnitCost(group.item, stockLots);
+    const resolved = resolveSaleCost(group.item, stockLots);
     const revenue = roundMoney(group.revenue);
     const qtySold = group.qty_sold;
+    const unit_price = qtySold > 0 ? roundMoney(revenue / qtySold) : revenue;
 
-    if (unitCost === null) {
+    if (!resolved) {
       rows.push({
         item: group.item,
         qty_sold: qtySold,
+        unit_price,
         revenue,
         unit_cost: null,
+        pack_cost: null,
+        pieces_per_pack: null,
+        stock_item: null,
         cogs: null,
         gross_profit: null,
         margin: null,
@@ -108,6 +140,7 @@ export function computeItemProfits(sales, stockLots) {
       continue;
     }
 
+    const unitCost = resolved.unit_cost;
     const cogs = roundMoney(qtySold * unitCost);
     const grossProfit = roundMoney(revenue - cogs);
     const margin = revenue > 0 ? roundMoney((grossProfit / revenue) * 100) : null;
@@ -115,8 +148,12 @@ export function computeItemProfits(sales, stockLots) {
     rows.push({
       item: group.item,
       qty_sold: qtySold,
+      unit_price,
       revenue,
       unit_cost: unitCost,
+      pack_cost: resolved.pack_cost,
+      pieces_per_pack: resolved.pieces_per_pack,
+      stock_item: resolved.stock_item,
       cogs,
       gross_profit: grossProfit,
       margin,

@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { API_BASE, isOffline } from '../lib/api.js';
 import { formatKsh, timeAgo } from '../lib/format.js';
 
-const emptyManual = { item: '', qty: '', unit_cost: '', supplier: '' };
+const emptyManual = { item: '', qty: '', unit_cost: '', pieces_per_pack: '1', supplier: '' };
 
-const emptyRow = () => ({ item: '', qty: '', unit_cost: '', total: '' });
+const emptyRow = () => ({ item: '', qty: '', unit_cost: '', pieces_per_pack: '1', total: '' });
 
 const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
 
@@ -232,6 +232,7 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
           item: row.item,
           qty: String(row.qty),
           unit_cost: String(row.unit_cost),
+          pieces_per_pack: String(row.pieces_per_pack || 1),
           total: String(row.total)
         })),
         rejected: data.rejected || [],
@@ -331,6 +332,7 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
           item: manual.item,
           qty: manual.qty,
           unit_cost: manual.unit_cost,
+          pieces_per_pack: manual.pieces_per_pack || 1,
           supplier: manual.supplier
         })
       });
@@ -528,6 +530,17 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
                     <label>Total</label>
                     <input className="form-input mono" value={row.total} readOnly tabIndex={-1} />
                   </div>
+                  <div className="form-group">
+                    <label>Pieces you sell</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min="1"
+                      step="any"
+                      value={row.pieces_per_pack || '1'}
+                      onChange={(e) => updateRow(index, 'pieces_per_pack', e.target.value)}
+                    />
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -561,8 +574,8 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
       <form className="logger-card" onSubmit={handleManual}>
         <h3>No receipt? Type it in</h3>
         <p className="stock-lead">
-          Item, quantity and what you paid per unit. This writes a purchase on
-          the ledger so the weekly totals stay honest.
+          What you paid for the pack. If you buy a bar of soap and sell pieces,
+          write how many pieces come from that bar.
         </p>
 
         <div className="form-group">
@@ -603,6 +616,19 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
               value={manual.unit_cost}
               onChange={(e) => setManual({ ...manual, unit_cost: e.target.value })}
               required
+              disabled={savingManual}
+            />
+          </div>
+          <div className="form-group">
+            <label>Pieces you sell</label>
+            <input
+              className="form-input"
+              type="number"
+              min="1"
+              step="any"
+              placeholder="1"
+              value={manual.pieces_per_pack}
+              onChange={(e) => setManual({ ...manual, pieces_per_pack: e.target.value })}
               disabled={savingManual}
             />
           </div>
@@ -654,7 +680,7 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
                 <div className="item-details">
                   <span className="item-name">{lot.item}</span>
                   <div className="item-meta">
-                    <span>{lot.qty} × {formatKsh(lot.unit_cost)}</span>
+                    <span>{lot.qty} × {formatKsh(lot.unit_cost)}{Number(lot.pieces_per_pack) > 1 ? ` · ${lot.pieces_per_pack} pieces` : ''}</span>
                     <span>•</span>
                     <span className={`badge badge-${lot.source}`}>{lot.source}</span>
                     {lot.supplier ? (

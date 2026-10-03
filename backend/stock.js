@@ -63,6 +63,7 @@ export async function persistStockLots({
       item: line.item,
       qty: line.qty,
       unit_cost: line.unit_cost,
+      pieces_per_pack: line.pieces_per_pack || 1,
       total: line.total,
       supplier: supplier || '',
       purchase_date: safeDate,

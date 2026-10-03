@@ -36,10 +36,13 @@ export const REPORT_LABELS = {
     itemsMissingCost: '{count} sold item(s) have no stock cost yet',
     noCostYet: 'NO COST YET',
     sold: 'sold',
+    soldAt: 'sold at',
     rev: 'rev',
     cost: 'cost',
-    addStockForMargin: 'add stock to see margin',
-    grossNote: 'Cost of goods sold uses the unit cost you recorded on Stock. Net profit above is still cash in minus cash out.',
+    piece: 'piece',
+    pack: 'pack',
+    addStockForMargin: 'add the pack you bought to see profit',
+    grossNote: 'Sold prices are always shown. Profit uses what you paid for stock — if you buy a bar and sell pieces, say how many pieces come from that bar on Stock.',
     languageFallbackNote: 'Showing English — translation was unavailable.'
   },
   sw: {
@@ -69,10 +72,13 @@ export const REPORT_LABELS = {
     itemsMissingCost: 'Bidhaa {count} zilizouzwa bado hazina gharama ya stock',
     noCostYet: 'HAKUNA GHARAMA BADO',
     sold: 'zimeuzwa',
+    soldAt: 'iliuza kwa',
     rev: 'mauzo',
     cost: 'gharama',
-    addStockForMargin: 'ongeza stock kuona faida',
-    grossNote: 'Gharama ya bidhaa zilizouzwa inatumia bei uliyorekodi kwenye Stock. Faida halisi hapo juu bado ni pesa iliyoingia kutoa pesa iliyotoka.',
+    piece: 'kipande',
+    pack: 'pakiti',
+    addStockForMargin: 'ongeza pakiti uliyonunua kuona faida',
+    grossNote: 'Bei ya kuuza inaonyeshwa kila wakati. Faida inatumia bei uliyolipa stock — ukinunua sabuni ya bar na kuuza vipande, andika vipande vingapi vinatoka kwenye bar hiyo kwenye Stock.',
     languageFallbackNote: 'Inaonyesha Kiingereza — tafsiri haikupatikana.'
   }
 };

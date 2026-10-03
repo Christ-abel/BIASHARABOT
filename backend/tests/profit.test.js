@@ -30,13 +30,37 @@ const purchase = (item, qty, unitPrice, extra = {}) => ({
   ...extra
 });
 
-const lot = (item, qty, unit_cost) => ({ item, qty, unit_cost, total: qty * unit_cost });
+const lot = (item, qty, unit_cost, pieces_per_pack = 1) => ({
+  item,
+  qty,
+  unit_cost,
+  pieces_per_pack,
+  total: qty * unit_cost
+});
 
 describe('item-level gross profit', () => {
   it('normalizes names so Sugar and sugar 2kg can match', () => {
     assert.equal(normalizeItemName('  Sugar  2kg '), 'sugar 2kg');
     assert.equal(resolveUnitCost('sugar', [lot('Sugar 2kg', 10, 280)]), 280);
     assert.equal(resolveUnitCost('Cooking Oil 1L', [lot('oil', 12, 250)]), 250);
+  });
+
+  it('costs a soap piece from a bar, not the whole bar', () => {
+    const cost = resolveUnitCost('soap', [lot('Bar Soap', 10, 80, 4)]);
+    assert.equal(cost, 20);
+    const rows = computeItemProfits([sale('Soap', 2, 30)], [lot('Bar Soap', 10, 80, 4)]);
+    assert.equal(rows[0].unit_price, 30);
+    assert.equal(rows[0].unit_cost, 20);
+    assert.equal(rows[0].cogs, 40);
+    assert.equal(rows[0].gross_profit, 20);
+    assert.equal(rows[0].pieces_per_pack, 4);
+  });
+
+  it('still shows the sold price when there is no matching stock', () => {
+    const rows = computeItemProfits([sale('Mkate', 1, 50)], []);
+    assert.equal(rows[0].unit_price, 50);
+    assert.equal(rows[0].revenue, 50);
+    assert.equal(rows[0].cost_unknown, true);
   });
 
   it('matches ugali sales to maize-flour stock so profit uses the bought cost', () => {

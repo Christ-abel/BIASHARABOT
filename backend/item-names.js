@@ -34,7 +34,8 @@ export const ITEM_FAMILIES = {
   salt: ['salt', 'chumvi'],
   tea: ['tea', 'chai', 'tea leaves'],
   oil: ['oil', 'cooking oil', 'mafuta', 'fat'],
-  soap: ['soap', 'bar soap', 'sabuni'],
+  soap: ['soap', 'bar soap', 'sabuni', 'soap piece', 'kipande'],
+  cup: ['kikombe', 'cup', 'cups', 'glass'],
   soda: ['soda', 'coke', 'fanta', 'sprite', 'soft drink'],
   water: ['water', 'maji', 'drinking water'],
   maize: ['maize', 'mahindi']

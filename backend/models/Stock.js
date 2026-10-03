@@ -17,6 +17,9 @@ const stockSchema = new mongoose.Schema({
   item: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   unit_cost: { type: Number, required: true, min: 0 },
+  // A duka often buys a bar/carton and sells pieces. Cost per sale is
+  // unit_cost / pieces_per_pack. 1 means they sell the same unit they bought.
+  pieces_per_pack: { type: Number, default: 1, min: 1 },
   total: { type: Number, required: true, min: 0 },
   supplier: { type: String, trim: true, default: '' },
   // The date printed on the receipt when we have one; otherwise the save time.
