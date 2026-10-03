@@ -1,7 +1,7 @@
 {
-  "name": "biasharagpt-root",
+  "name": "biasharabot-root",
   "version": "1.0.0",
-  "description": "Root workspace for BiasharaGPT",
+  "description": "Root workspace for BiasharaBot",
   "scripts": {
     "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
     "dev:backend": "npm run dev --prefix backend",

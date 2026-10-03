@@ -10,8 +10,8 @@
 
 export const REPORT_LABELS = {
   en: {
-    weeklyTitle: 'BiasharaGPT Weekly Report',
-    dailyTitle: 'BiasharaGPT Daily Report',
+    weeklyTitle: 'BiasharaBot Weekly Report',
+    dailyTitle: 'BiasharaBot Daily Report',
     shop: 'Shop',
     weeklySubtitle: 'WEEKLY REPORT',
     revenue: 'REVENUE',
@@ -22,7 +22,7 @@ export const REPORT_LABELS = {
     grossProfit: 'GROSS PROFIT',
     grossProfitByItem: 'GROSS PROFIT BY ITEM',
     outstandingCredit: 'OUTSTANDING CREDIT',
-    poweredBy: 'Powered by BiasharaGPT!',
+    poweredBy: 'Powered by BiasharaBot!',
     printedAt: 'Printed at',
     noSales: 'No sales this week yet.',
     itemsMissingCost: '{count} sold item(s) have no stock cost yet',
@@ -35,8 +35,8 @@ export const REPORT_LABELS = {
     languageFallbackNote: 'Showing English — translation was unavailable.'
   },
   sw: {
-    weeklyTitle: 'Ripoti ya Wiki ya BiasharaGPT',
-    dailyTitle: 'Ripoti ya Siku ya BiasharaGPT',
+    weeklyTitle: 'Ripoti ya Wiki ya BiasharaBot',
+    dailyTitle: 'Ripoti ya Siku ya BiasharaBot',
     shop: 'Duka',
     weeklySubtitle: 'RIPOTI YA WIKI',
     revenue: 'MAUZO',
@@ -47,7 +47,7 @@ export const REPORT_LABELS = {
     grossProfit: 'FAIDA GHAFI',
     grossProfitByItem: 'FAIDA GHAFI KWA BIDHAA',
     outstandingCredit: 'DENI LINALOSUBIRI',
-    poweredBy: 'Imewezeshwa na BiasharaGPT!',
+    poweredBy: 'Imewezeshwa na BiasharaBot!',
     printedAt: 'Imeandikwa',
     noSales: 'Hakuna mauzo wiki hii bado.',
     itemsMissingCost: 'Bidhaa {count} zilizouzwa bado hazina gharama ya stock',
@@ -108,8 +108,8 @@ export const COMPLIANCE_LABELS = {
     incomeTaxBody: 'File your income tax return on iTax by {deadline} for the previous year of income. Keep the weekly till slip — it is the record you will need.',
     thresholdTot: 'Your turnover has entered the Turnover Tax band (above KSh {min}).',
     thresholdVat: 'Your turnover has reached the VAT registration threshold (KSh {threshold}).',
-    deadlineSms: 'BiasharaGPT: {title} — due {deadline}. {hint}',
-    newObligationSms: 'BiasharaGPT: {title} now applies to {shop}. {hint}'
+    deadlineSms: 'BiasharaBot: {title} — due {deadline}. {hint}',
+    newObligationSms: 'BiasharaBot: {title} now applies to {shop}. {hint}'
   },
   sw: {
     heading: 'Uzingatiaji wa kodi na biashara',
@@ -157,8 +157,8 @@ export const COMPLIANCE_LABELS = {
     incomeTaxBody: 'Wasilisha marejesho ya kodi kwenye iTax kufikia {deadline} kwa mwaka uliopita wa mapato. Hifadhi ripoti ya wiki — ndiyo kumbukumbu utakayohitaji.',
     thresholdTot: 'Mauzo yako yameingia kwenye kiwango cha TOT (juu ya KSh {min}).',
     thresholdVat: 'Mauzo yako yamefika kizingiti cha usajili wa VAT (KSh {threshold}).',
-    deadlineSms: 'BiasharaGPT: {title} — tarehe {deadline}. {hint}',
-    newObligationSms: 'BiasharaGPT: {title} sasa inahusu {shop}. {hint}'
+    deadlineSms: 'BiasharaBot: {title} — tarehe {deadline}. {hint}',
+    newObligationSms: 'BiasharaBot: {title} sasa inahusu {shop}. {hint}'
   }
 };
 

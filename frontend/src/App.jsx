@@ -120,6 +120,8 @@ export default function App() {
   // Weekly Report State
   const [report, setReport] = useState(null);
   const [reportLabels, setReportLabels] = useState(null);
+  // True when the server could not translate and served English instead.
+  const [reportLanguageFallback, setReportLanguageFallback] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [smsStatus, setSmsStatus] = useState(null);
 
@@ -176,6 +178,7 @@ export default function App() {
       const data = await response.json();
       setReport(data.report);
       setReportLabels(data.labels || null);
+      setReportLanguageFallback(Boolean(data.languageFallback));
 
       if (servedFromCache(response)) {
         // A replayed response means no SMS went out just now — saying it did
@@ -187,7 +190,9 @@ export default function App() {
       }
 
       setReportSavedAt(null);
-      saveSnapshot(cacheKey, data.report);
+      // Keep the labels with the figures so an offline till slip stays in the
+      // owner's language instead of dropping back to English.
+      saveSnapshot(cacheKey, { figures: data.report, labels: data.labels || null, language: data.language || 'en' });
       if (data.smsStatus && data.smsStatus.success) {
         setSmsStatus({ success: true, message: `Weekly report SMS sent automatically to ${business.phone}!` });
       } else {
@@ -197,7 +202,11 @@ export default function App() {
       console.warn('Serving weekly report from offline snapshot:', err);
       const snapshot = await readSnapshot(cacheKey);
       if (snapshot) {
-        setReport(snapshot.data);
+        // Snapshots saved before reports carried labels hold the bare figures.
+        const saved = snapshot.data || {};
+        setReport(saved.figures || saved);
+        setReportLabels(saved.labels || null);
+        setReportLanguageFallback(false);
         setReportSavedAt(snapshot.savedAt);
         setSmsStatus(null);
       } else {
@@ -638,7 +647,7 @@ export default function App() {
     return (
       <div className="app-container">
         <header>
-          <h1>BiasharaGPT</h1>
+          <h1>BiasharaBot</h1>
           <p>Kenyan's Number one shop assistant</p>
         </header>
         <div className="content">
@@ -960,8 +969,14 @@ export default function App() {
                   </div>
                 )}
 
+                {reportLanguageFallback && (
+                  <div className="offline-snapshot-note">
+                    {reportLabels?.languageFallbackNote || 'Showing English — translation was unavailable.'}
+                  </div>
+                )}
+
                 <div className="receipt-card">
-                  <div className="receipt-title">BiasharaGPT</div>
+                  <div className="receipt-title">BiasharaBot</div>
                   <div className="receipt-subtitle">
                     {business.name.toUpperCase()} {reportLabels?.weeklySubtitle || 'WEEKLY REPORT'}
                   </div>
@@ -1064,7 +1079,7 @@ export default function App() {
 
                   <div className="receipt-footer-text">
                     {reportLabels?.printedAt || 'Printed at'} {new Date().toLocaleDateString()}<br />
-                    {reportLabels?.poweredBy || 'Powered by BiasharaGPT'}
+                    {reportLabels?.poweredBy || 'Powered by BiasharaBot'}
                   </div>
                 </div>
               </>

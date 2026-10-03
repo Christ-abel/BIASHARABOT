@@ -1,4 +1,4 @@
-# BiasharaGPT frontend (installable PWA)
+# BiasharaBot frontend (installable PWA)
 
 React + Vite app that a duka owner installs to their phone's home screen. The
 point of the PWA work is that **a sale can be recorded with no network** — by
