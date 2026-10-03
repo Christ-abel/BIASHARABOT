@@ -4,6 +4,7 @@ import {
   buildWeeklyReport,
   computeItemProfits,
   formatItemProfitSms,
+  groupSoldProducts,
   normalizeItemName,
   resolveUnitCost
 } from '../profit.js';
@@ -36,6 +37,15 @@ describe('item-level gross profit', () => {
     assert.equal(normalizeItemName('  Sugar  2kg '), 'sugar 2kg');
     assert.equal(resolveUnitCost('sugar', [lot('Sugar 2kg', 10, 280)]), 280);
     assert.equal(resolveUnitCost('Cooking Oil 1L', [lot('oil', 12, 250)]), 250);
+  });
+
+  it('matches ugali sales to maize-flour stock so profit uses the bought cost', () => {
+    const cost = resolveUnitCost('Ugali', [lot('Maize Flour 2kg', 20, 150)]);
+    assert.equal(cost, 150);
+    const rows = computeItemProfits([sale('Ugali', 2, 30)], [lot('Maize Flour 2kg', 20, 150)]);
+    assert.equal(rows[0].cogs, 300);
+    assert.equal(rows[0].gross_profit, -240);
+    assert.equal(rows[0].cost_unknown, false);
   });
 
   it('uses the weighted-average unit cost across purchase lots', () => {
@@ -104,6 +114,20 @@ describe('item-level gross profit', () => {
     assert.equal(report.gross_profit, 400);
     assert.equal(report.items_missing_cost, 1);
     assert.equal(report.unpriced_revenue, 1000);
+  });
+
+  it('groups sold products with quantity, unit price and line total', () => {
+    const rows = groupSoldProducts([
+      sale('Sugar 2kg', 2, 200),
+      sale('sugar 2kg', 1, 200),
+      sale('Oil', 1, 450)
+    ]);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].item, 'Sugar 2kg');
+    assert.equal(rows[0].qty, 3);
+    assert.equal(rows[0].unit_price, 200);
+    assert.equal(rows[0].total, 600);
+    assert.equal(buildWeeklyReport([sale('Sugar 2kg', 3, 200)]).sold_items[0].total, 600);
   });
 
   it('formats a compact SMS addendum with overall and top item margins', () => {

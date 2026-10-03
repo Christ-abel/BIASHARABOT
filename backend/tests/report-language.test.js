@@ -19,6 +19,10 @@ const SAMPLE_REPORT = {
   gross_profit: 4200,
   gross_margin: 33.6,
   items_missing_cost: 1,
+  sold_items: [
+    { item: 'Sugar 2kg', qty: 10, unit_price: 200, total: 2000 },
+    { item: 'Oil', qty: 2, unit_price: 450, total: 900 }
+  ],
   item_profits: [
     { item: 'Sugar 2kg', gross_profit: 1200, margin: 40, cost_unknown: false },
     { item: 'Oil', gross_profit: 800, margin: 25, cost_unknown: false }
@@ -55,11 +59,17 @@ describe('report language', () => {
     const en = await assembleLocalizedReport({
       report: SAMPLE_REPORT,
       businessName: 'Otieno Wholesalers',
+      shopPhone: '254712345678',
+      tillNumber: '5341163',
+      periodLabel: '27 Sep 2026 – 3 Oct 2026',
       language: 'en'
     });
     const sw = await assembleLocalizedReport({
       report: SAMPLE_REPORT,
       businessName: 'Otieno Wholesalers',
+      shopPhone: '254712345678',
+      tillNumber: '5341163',
+      periodLabel: '27 Sep 2026 – 3 Oct 2026',
       language: 'sw'
     });
 
@@ -68,6 +78,10 @@ describe('report language', () => {
     assert.match(sw.sms, /Ripoti ya Wiki/);
     assert.match(en.sms, /Otieno Wholesalers/);
     assert.match(sw.sms, /Otieno Wholesalers/);
+    assert.match(en.sms, /5341163/);
+    assert.match(en.sms, /27 Sep 2026/);
+    assert.match(en.sms, /PRODUCTS SOLD/);
+    assert.match(sw.sms, /BIDHAA ZILIZOUZWA/);
     assert.match(sw.sms, /Sugar 2kg/);
     assert.equal(formatKesAmount(SAMPLE_REPORT.revenue), 'KSh 12500.50');
   });

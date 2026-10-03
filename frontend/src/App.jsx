@@ -8,6 +8,8 @@ import {
   retryOutboxItem,
 } from './lib/outbox.js';
 import { formatKsh, formatPercent, timeAgo } from './lib/format.js';
+import { entriesOnKenyaDate, groupByItem, kenyaDayOf, todayKenya } from './lib/dates.js';
+import { attachSaleProfits } from './lib/item-profit.js';
 import { useOfflineSync } from './hooks/useOfflineSync.js';
 import ConnectionBar from './components/ConnectionBar.jsx';
 import PendingEntries from './components/PendingEntries.jsx';
@@ -16,11 +18,33 @@ import UpdateBanner from './components/UpdateBanner.jsx';
 import StockPanel from './components/StockPanel.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 import PasswordField from './components/PasswordField.jsx';
+import DateFilter from './components/DateFilter.jsx';
 
 // The service worker replays the last good API response when the network is
 // gone, and stamps it so the UI can say "this is a saved copy" instead of
 // passing stale figures off as live ones.
 const servedFromCache = (response) => response.headers.get('X-Biashara-From-Cache') === '1';
+
+const pickAudioMime = () => {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const types = ['audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+  return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+};
+
+const audioFileName = (mime) => {
+  if (String(mime).includes('ogg')) return 'voice_note.ogg';
+  if (String(mime).includes('mp4')) return 'voice_note.m4a';
+  return 'voice_note.webm';
+};
+
+const describeLogged = (payload) => {
+  const rows = Array.isArray(payload?.entries) && payload.entries.length ? payload.entries : [payload];
+  const lines = rows
+    .filter(Boolean)
+    .map((row) => row.transcription || `${row.item} (${row.qty} × ${formatKsh(row.unit_price)})`);
+  if (lines.length === 1) return `Logged: ${lines[0]}`;
+  return `Logged ${lines.length} items: ${lines.join(' · ')}`;
+};
 
 // Home-screen shortcuts in the manifest deep-link with ?tab=...
 const initialTab = () => {
@@ -128,6 +152,11 @@ export default function App() {
   const [reportLanguageFallback, setReportLanguageFallback] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [smsStatus, setSmsStatus] = useState(null);
+  const [ledgerDate, setLedgerDate] = useState(todayKenya);
+  const [reportDate, setReportDate] = useState('');
+  const [reportPeriod, setReportPeriod] = useState(null);
+  const [reportShop, setReportShop] = useState(null);
+  const [stockLots, setStockLots] = useState([]);
 
   // Simulator State
   const [showSimulator, setShowSimulator] = useState(false);
@@ -147,6 +176,10 @@ export default function App() {
 
       const data = await response.json();
       setEntries(data);
+      fetch(`${API_BASE}/stock?businessId=${business.id}`)
+        .then((stockRes) => (stockRes.ok ? stockRes.json() : []))
+        .then((lots) => { if (Array.isArray(lots)) setStockLots(lots); })
+        .catch(() => {});
 
       if (servedFromCache(response)) {
         const snapshot = await readSnapshot(cacheKey);
@@ -166,23 +199,27 @@ export default function App() {
   };
 
   // Fetch weekly report + trigger SMS automatically on load
-  const fetchReportAndSendSMS = async () => {
+  const fetchReportAndSendSMS = async ({ date = reportDate, sendSms } = {}) => {
     if (!business) return;
     const cacheKey = `report:${business.id}`;
     setReportLoading(true);
     setSmsStatus(null);
     try {
-      const response = await fetch(
-        `${API_BASE}/reports/weekly?businessId=${business.id}&phone=${business.phone}&businessName=${encodeURIComponent(
-          business.name
-        )}`
-      );
+      const params = new URLSearchParams({
+        businessId: business.id,
+        businessName: business.name
+      });
+      if (date) params.set('date', date);
+      if (sendSms || (!date && sendSms !== false)) params.set('phone', business.phone);
+      const response = await fetch(`${API_BASE}/reports/weekly?${params.toString()}`);
       if (!response.ok) throw new Error(`Report request failed (${response.status})`);
 
       const data = await response.json();
       setReport(data.report);
       setReportLabels(data.labels || null);
       setReportLanguageFallback(Boolean(data.languageFallback));
+      setReportPeriod(data.period || null);
+      setReportShop(data.shop || { name: business.name, phone: business.phone, tillNumber: business.tillNumber });
 
       if (servedFromCache(response)) {
         // A replayed response means no SMS went out just now — saying it did
@@ -199,8 +236,11 @@ export default function App() {
       saveSnapshot(cacheKey, { figures: data.report, labels: data.labels || null, language: data.language || 'en' });
       if (data.smsStatus && data.smsStatus.success) {
         setSmsStatus({ success: true, message: `Weekly report SMS sent automatically to ${business.phone}!` });
-      } else {
+      } else if (data.smsStatus) {
         setSmsStatus({ success: false, error: 'SMS notification scheduled but service is offline' });
+      } else {
+        // Date browse does not send SMS — do not pretend the service failed.
+        setSmsStatus(null);
       }
     } catch (err) {
       console.warn('Serving weekly report from offline snapshot:', err);
@@ -267,11 +307,11 @@ export default function App() {
     setError(null);
     setSuccess(null);
     if (activeTab === 'report' && business) {
-      fetchReportAndSendSMS();
+      fetchReportAndSendSMS({ date: reportDate, sendSms: !reportDate });
     } else {
       fetchEntries();
     }
-  }, [activeTab]);
+  }, [activeTab, reportDate]);
 
   // Handle Business Sign-up (Communicates with database endpoint)
   const handleSetupSubmit = async (e) => {
@@ -408,7 +448,7 @@ export default function App() {
       if (response.ok) {
         const newEntry = await response.json();
         setTextEntry('');
-        setSuccess(`Logged: "${newEntry.transcription || newEntry.item}" (${newEntry.qty} x KSh ${newEntry.unit_price} = KSh ${newEntry.total.toLocaleString()})`);
+        setSuccess(describeLogged(newEntry));
         fetchEntries();
       } else if (response.status >= 500) {
         // Server reachable but broken — queue rather than lose the sale.
@@ -434,8 +474,13 @@ export default function App() {
     setError(null);
     setSuccess(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+      });
+      const mimeType = pickAudioMime();
+      const mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -445,15 +490,15 @@ export default function App() {
       };
 
       mediaRecorder.onstop = async () => {
-        // MediaRecorder picks its own container; keep it so the backend gets a
-        // mime type Gemini can actually read (Safari records mp4, not webm).
-        const recordedType = mediaRecorder.mimeType || 'audio/webm';
-        const audioBlob = new Blob(audioChunksRef.current, { type: recordedType });
+        // Prefer ogg/mp4 when the browser can produce them — Gemini reads those
+        // more reliably than a bare webm container.
+        const recordedType = mediaRecorder.mimeType || mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: recordedType.split(';')[0] });
         await uploadAudio(audioBlob, durationRef.current);
         stream.getTracks().forEach((track) => track.stop());
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(250);
       setIsRecording(true);
       setRecordingDuration(0);
       durationRef.current = 0;
@@ -492,9 +537,15 @@ export default function App() {
       return;
     }
 
+    if (durationSec < 0.8 && audioBlob.size < 2000) {
+      setError('Hold the mic a little longer and say each item with its price, for example: Ugali twenty bob, nyama thirty bob.');
+      setLoading(false);
+      return;
+    }
+
     try {
       const formData = new FormData();
-      formData.append('audio', audioBlob, 'voice_note.webm');
+      formData.append('audio', audioBlob, audioFileName(audioBlob.type));
       formData.append('businessId', business.id);
 
       const response = await fetch(`${API_BASE}/entries/voice`, {
@@ -504,7 +555,7 @@ export default function App() {
 
       if (response.ok) {
         const newEntry = await response.json();
-        setSuccess(`Transcribed: "${newEntry.transcription || newEntry.item}" — Logged: ${newEntry.item} (${newEntry.qty} x KSh ${newEntry.unit_price} = KSh ${newEntry.total.toLocaleString()})`);
+        setSuccess(describeLogged(newEntry));
         fetchEntries();
       } else if (response.status >= 500) {
         await queueVoiceEntry(audioBlob, durationSec);
@@ -657,32 +708,33 @@ export default function App() {
     setIsAdminAuthenticated(false);
     setBusiness(null);
     setEntries([]);
+    setStockLots([]);
     setReport(null);
     setAuthMode('login');
   };
 
-  // Calculate Running Totals for Today
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-
-  const todayEntries = entries.filter((e) => new Date(e.timestamp) >= todayStart);
+  const dayEntries = entriesOnKenyaDate(entries, ledgerDate);
   const sumByType = (rows, type) =>
     rows.filter((e) => e.type === type).reduce((s, e) => s + (Number(e.total) || 0), 0);
 
-  // Entries still sitting in the outbox count towards today as well — the sale
-  // happened, it just has not reached the server. Typed entries contribute
-  // their on-device estimate; voice notes have no figure until they sync.
-  const pendingToday = pending.filter((item) => new Date(item.createdAt) >= todayStart);
+  // Entries still sitting in the outbox count towards the selected day as well.
+  const pendingToday = pending.filter((item) => kenyaDayOf(item.createdAt) === ledgerDate);
   const provisionalToday = pendingToday.map((item) => item.provisional).filter(Boolean);
   const unpricedPendingCount = pendingToday.length - provisionalToday.length;
 
-  const todayRevenue = sumByType(todayEntries, 'sale') + sumByType(provisionalToday, 'sale');
+  const todayRevenue = sumByType(dayEntries, 'sale') + sumByType(provisionalToday, 'sale');
   const todayPurchases =
-    sumByType(todayEntries, 'purchase') + sumByType(provisionalToday, 'purchase');
+    sumByType(dayEntries, 'purchase') + sumByType(provisionalToday, 'purchase');
   const todayExpenses =
-    sumByType(todayEntries, 'expense') + sumByType(provisionalToday, 'expense');
+    sumByType(dayEntries, 'expense') + sumByType(provisionalToday, 'expense');
   const todayNet = todayRevenue - todayPurchases - todayExpenses;
   const totalsAreEstimates = provisionalToday.length > 0;
+  const soldOnDay = attachSaleProfits(
+    groupByItem([...dayEntries.filter((row) => row.type === 'sale'), ...provisionalToday.filter((row) => row.type === 'sale')]),
+    stockLots
+  );
+  const boughtOnDay = groupByItem(dayEntries.filter((row) => row.type === 'purchase'));
+  const adminEntries = entriesOnKenyaDate(entries, ledgerDate);
 
   // Unmatched entries list for webhook simulator dropdown
   const unmatchedSales = entries.filter((e) => e.type === 'sale' && !e.matched && e.source !== 'payhero');
@@ -908,20 +960,66 @@ export default function App() {
               </button>
             )}
 
-            {/* Today's Summary Metrics */}
+            <DateFilter id="ledger-date" label="Look up a day" value={ledgerDate} onChange={setLedgerDate} />
+
+            {/* Day summary metrics */}
             <div className="metrics-grid">
               <div className="metric-card">
-                <span className="metric-label">Today's Sales</span>
+                <span className="metric-label">{ledgerDate === todayKenya() ? "Today's Sales" : 'Sales that day'}</span>
                 <span className="metric-val mono">
                   {totalsAreEstimates ? '≈ ' : ''}KSh {todayRevenue.toLocaleString()}
                 </span>
               </div>
               <div className={`metric-card ${todayNet >= 0 ? 'profit-positive' : 'profit-negative'}`}>
-                <span className="metric-label">Today's Profit</span>
+                <span className="metric-label">{ledgerDate === todayKenya() ? "Today's Profit" : 'Profit that day'}</span>
                 <span className="metric-val mono">
                   {totalsAreEstimates ? '≈ ' : ''}KSh {todayNet.toLocaleString()}
                 </span>
               </div>
+            </div>
+
+            <div className="logger-card">
+              <h3>Products sold</h3>
+              <p className="stock-lead">Grouped by item, with the sale price against what you paid for that stock.</p>
+              {soldOnDay.length === 0 ? (
+                <p className="date-filter-caption">No sales recorded on this date.</p>
+              ) : (
+                <div className="category-list">
+                  {soldOnDay.map((row) => (
+                    <div className="category-row" key={row.item}>
+                      <div>
+                        <strong>{row.item}</strong>
+                        <span>{row.qty} × {formatKsh(row.unit_price)}</span>
+                        {row.cost_unknown ? (
+                          <span className="profit-missing">No stock cost yet — upload the receipt or type the purchase.</span>
+                        ) : (
+                          <span className={row.gross_profit >= 0 ? 'profit-positive-text' : 'profit-negative-text'}>
+                            Bought at {formatKsh(row.unit_cost)} · profit {formatKsh(row.gross_profit)}
+                            {Number.isFinite(row.margin) ? ` (${formatPercent(row.margin)})` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <span className="mono">{formatKsh(row.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {boughtOnDay.length > 0 && (
+                <>
+                  <h3 style={{ marginTop: '18px' }}>Stock bought</h3>
+                  <div className="category-list">
+                    {boughtOnDay.map((row) => (
+                      <div className="category-row" key={`buy-${row.item}`}>
+                        <div>
+                          <strong>{row.item}</strong>
+                          <span>{row.qty} × {formatKsh(row.unit_price)}</span>
+                        </div>
+                        <span className="mono">{formatKsh(row.total)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             {(totalsAreEstimates || unpricedPendingCount > 0 || entriesSavedAt) && (
@@ -949,7 +1047,7 @@ export default function App() {
             <div className="logger-card torn-divider-bottom">
               <h3>Log New Transaction</h3>
               <p style={{ fontSize: '13px', color: '#5A524E', marginBottom: '16px' }}>
-                Tap the microphone to speak, or type details below:
+                Speak each item with its price, for example: “Ugali twenty bob, nyama thirty bob”. Or type the same below.
               </p>
 
               {!online && (
@@ -1029,6 +1127,14 @@ export default function App() {
         {activeTab === 'report' && (
           /* Weekly receipt till slip view (SMS sent automatically on render) */
           <div className="receipt-wrapper">
+            <DateFilter
+              id="report-date"
+              label="Report date"
+              value={reportDate}
+              onChange={setReportDate}
+              allowEmpty
+              emptyLabel="This week"
+            />
             {reportLoading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '50px 0' }}>
                 <div className="loading-spinner" />
@@ -1055,10 +1161,40 @@ export default function App() {
                 )}
 
                 <div className="receipt-card">
-                  <div className="receipt-title">BiasharaBot</div>
+                  <div className="receipt-title">{(reportShop?.name || business.name).toUpperCase()}</div>
                   <div className="receipt-subtitle">
-                    {business.name.toUpperCase()} {reportLabels?.weeklySubtitle || 'WEEKLY REPORT'}
+                    {reportDate
+                      ? (reportLabels?.dailySubtitle || 'DAILY REPORT')
+                      : (reportLabels?.weeklySubtitle || 'WEEKLY REPORT')}
                   </div>
+                  <div className="receipt-shop-meta">
+                    {reportShop?.tillNumber || business.tillNumber ? (
+                      <div>{reportLabels?.till || 'Till'} {reportShop?.tillNumber || business.tillNumber}</div>
+                    ) : null}
+                    <div>{reportLabels?.phone || 'Phone'} {reportShop?.phone || business.phone}</div>
+                    <div>{reportLabels?.period || 'Period'} {reportPeriod?.label || (reportDate || 'This week')}</div>
+                  </div>
+
+                  <div className="receipt-divider" />
+
+                  <div className="receipt-section-title">{reportLabels?.productsSold || 'PRODUCTS SOLD'}</div>
+                  {Array.isArray(report.sold_items) && report.sold_items.length > 0 ? (
+                    report.sold_items.map((row) => (
+                      <div className="receipt-item-profit" key={`sold-${row.item}`}>
+                        <div className="receipt-row">
+                          <span className="label">{row.item.toUpperCase()}</span>
+                          <span className="value mono">{formatKsh(row.total)}</span>
+                        </div>
+                        <div className="receipt-item-meta">
+                          {row.qty} × {formatKsh(row.unit_price)}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="receipt-item-meta" style={{ marginBottom: '10px' }}>
+                      {reportLabels?.noSales || 'No sales this week yet.'}
+                    </div>
+                  )}
 
                   <div className="receipt-divider" />
 
@@ -1157,7 +1293,8 @@ export default function App() {
                   </div>
 
                   <div className="receipt-footer-text">
-                    {reportLabels?.printedAt || 'Printed at'} {new Date().toLocaleDateString()}<br />
+                    {reportLabels?.printedAt || 'Printed at'} {reportPeriod?.label || new Date().toLocaleDateString()}<br />
+                    {reportShop?.name || business.name}<br />
                     {reportLabels?.poweredBy || 'Powered by BiasharaBot'}
                   </div>
                 </div>
@@ -1251,6 +1388,8 @@ export default function App() {
                     </div>
                   </div>
 
+                  <DateFilter id="admin-date" label="Filter history by date" value={ledgerDate} onChange={setLedgerDate} />
+
                   <PendingEntries
                     items={pending}
                     failed={failed}
@@ -1266,13 +1405,13 @@ export default function App() {
                     </div>
                   )}
 
-                  {entries.length === 0 ? (
+                  {adminEntries.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '40px 0', color: '#5A524E' }}>
-                      No ledger entries found.
+                      No ledger entries found for this date.
                     </div>
                   ) : (
                     <div className="ledger-list">
-                      {entries.map((entry) => (
+                      {adminEntries.map((entry) => (
                         <div className={`ledger-item ${entry.type}`} key={entry._id}>
                           <div className="item-details">
                             {/* Mask customer details / spontaneous Mpesa items if privacy toggle is enabled */}

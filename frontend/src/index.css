@@ -565,7 +565,102 @@ header p {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--color-gray-dark);
-  margin-bottom: 20px;
+  margin-bottom: 8px;
+}
+
+.receipt-shop-meta {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-gray-dark);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.date-filter {
+  background: var(--color-white);
+  border-radius: var(--border-radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.date-filter label {
+  display: block;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-indigo-ink);
+  margin-bottom: 8px;
+}
+
+.date-filter-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.date-filter-controls .form-input {
+  flex: 1;
+}
+
+.date-filter-today {
+  border: none;
+  background: var(--color-indigo-ink);
+  color: var(--color-white);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.date-filter-today:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.date-filter-caption {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--color-gray-dark);
+}
+
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.category-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--color-gray-light);
+}
+
+.category-row strong {
+  display: block;
+  color: var(--color-indigo-ink);
+}
+
+.category-row span {
+  display: block;
+  font-size: 13px;
+  color: var(--color-gray-dark);
+}
+
+.profit-missing {
+  color: var(--color-baked-clay);
+}
+
+.profit-positive-text {
+  color: #1f7a4d;
+}
+
+.profit-negative-text {
+  color: var(--color-baked-clay);
 }
 
 .receipt-divider {

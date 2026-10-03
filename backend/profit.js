@@ -14,18 +14,13 @@
  * purchase costs, we do not decrement lots.
  */
 
+import { itemFamily, normalizeItemName } from './item-names.js';
 import { roundMoney } from './stock-validation.js';
+
+export { normalizeItemName, itemFamily } from './item-names.js';
 
 /** Shortest token we will use for a fuzzy item-name match. "oil" is fine; "a" is not. */
 const FUZZY_MIN_LENGTH = 3;
-
-export function normalizeItemName(name) {
-  return String(name || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function weightedAverageCost(lots) {
   let costSum = 0;
@@ -51,8 +46,9 @@ export function resolveUnitCost(itemName, stockLots) {
   const key = normalizeItemName(itemName);
   if (!key || !Array.isArray(stockLots) || !stockLots.length) return null;
 
-  const exact = stockLots.filter((lot) => normalizeItemName(lot.item) === key);
-  if (exact.length) return weightedAverageCost(exact);
+  const family = itemFamily(itemName);
+  const familyMatch = stockLots.filter((lot) => itemFamily(lot.item) === family);
+  if (familyMatch.length) return weightedAverageCost(familyMatch);
 
   const fuzzy = stockLots.filter((lot) => {
     const lotKey = normalizeItemName(lot.item);
@@ -132,6 +128,27 @@ export function computeItemProfits(sales, stockLots) {
   return rows;
 }
 
+/** Receipt lines: one row per product sold, with qty, unit price and total. */
+export function groupSoldProducts(sales = []) {
+  const groups = new Map();
+  for (const sale of Array.isArray(sales) ? sales : []) {
+    const label = String(sale.item || 'Sale').trim() || 'Sale';
+    const key = normalizeItemName(label) || 'sale';
+    const existing = groups.get(key) || { item: label, qty: 0, total: 0 };
+    existing.qty += Number(sale.qty) || 0;
+    existing.total += Number(sale.total) || 0;
+    groups.set(key, existing);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      item: group.item,
+      qty: group.qty,
+      total: roundMoney(group.total),
+      unit_price: group.qty > 0 ? roundMoney(group.total / group.qty) : roundMoney(group.total)
+    }))
+    .sort((a, b) => b.total - a.total);
+}
+
 /**
  * Full weekly report object. Cash-basis fields keep the same formula the
  * dashboard and SMS have always used; the new fields sit beside them.
@@ -148,6 +165,7 @@ export function buildWeeklyReport(entries = [], stockLots = []) {
   const net_profit = revenue - cost_of_goods - other_expenses - mpesa_fees;
 
   const sales = list.filter((e) => e.type === 'sale');
+  const sold_items = groupSoldProducts(sales);
   const item_profits = computeItemProfits(sales, lots);
 
   const priced = item_profits.filter((row) => !row.cost_unknown);
@@ -165,6 +183,7 @@ export function buildWeeklyReport(entries = [], stockLots = []) {
     mpesa_fees,
     net_profit,
     outstanding_credit,
+    sold_items,
     item_profits,
     item_cogs: roundMoney(item_cogs),
     gross_profit: roundMoney(gross_profit),

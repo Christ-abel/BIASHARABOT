@@ -7,12 +7,14 @@ import Entry from './models/Entry.js';
 import Business from './models/Business.js';
 import Stock from './models/Stock.js';
 import { parseTextWithGemini, parseAudioWithGemini, parseReceiptWithGemini, translatePhrasesWithGemini } from './gemini.js';
+import { coerceParsedEntries } from './parse-entry.js';
 import { sanitizeReceiptParse, validateStockItem, validateStockBatch } from './stock-validation.js';
 import { persistStockLots } from './stock.js';
 import { buildWeeklyReport } from './profit.js';
 import { assembleLocalizedReport, normalizeReportLanguage } from './report.js';
+import { filterEntriesByKenyaRange, formatKenyaPeriod, kenyaDateString, kenyaWeekRange } from './kenya-dates.js';
 import { REPORT_LANGUAGES, isSupportedReportLanguage } from './languages.js';
-import { COMPLIANCE_LABELS } from './report-labels.js';
+import { COMPLIANCE_LABELS, REPORT_LABELS } from './report-labels.js';
 import { toPublicBusiness } from './business-public.js';
 import { KENYA_COUNTIES } from './compliance-config.js';
 import { evaluateCompliance } from './compliance-rules.js';
@@ -49,7 +51,10 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // Memory storage for audio and receipt uploads (prevents disk clutter)
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }
+});
 
 const RECEIPT_MAX_BYTES = 15 * 1024 * 1024;
 const RECEIPT_TYPES = /^(image\/(jpeg|jpg|pjpeg|png|webp|heic|heif|gif|bmp)|application\/(pdf|octet-stream))$/i;
@@ -123,6 +128,62 @@ if (!mongoURI) {
       console.log("Ensure your IP address is whitelisted in MongoDB Atlas and the credentials in MONGODB_URI are correct.");
     });
 }
+async function languageForBusiness(businessId) {
+  if (!businessId) return 'en';
+  const biz = await Business.findOne({ id: businessId }).select('reportLanguage').lean();
+  return normalizeReportLanguage(biz?.reportLanguage);
+}
+
+async function persistParsedItems({ parsed, businessId, source, clientId, occurredAt, fallbackText, language }) {
+  if (parsed?.error) {
+    return { status: 400, body: { error: parsed.error } };
+  }
+
+  const spoken = parsed?.transcription || fallbackText || '';
+  const items = coerceParsedEntries(parsed, spoken, language);
+  if (!items.length) {
+    console.warn('[BAD PARSE] no priced items:', parsed);
+    return { status: 422, body: { error: 'Could not determine an amount for that entry', parsed } };
+  }
+
+  const saved = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const row = items[i];
+    const cid = clientId ? (items.length === 1 ? clientId : `${clientId}:${i}`) : undefined;
+    if (cid) {
+      const already = await findByClientId(cid);
+      if (already) {
+        saved.push(already);
+        continue;
+      }
+    }
+
+    const entry = new Entry({
+      business_id: businessId || 'demo-shop',
+      type: row.type,
+      item: row.item,
+      qty: row.qty,
+      unit_price: row.unit_price,
+      total: row.total,
+      transcription: row.transcription || spoken,
+      source,
+      matched: false,
+      client_id: cid,
+      timestamp: resolveTimestamp(occurredAt)
+    });
+
+    const result = await saveEntryIdempotently(entry, cid);
+    if (!result.duplicate && cid) await reconcileOfflineSale(result.entry);
+    saved.push(result.entry);
+  }
+
+  const first = saved[0]?.toObject ? saved[0].toObject() : saved[0];
+  return {
+    status: 201,
+    body: { ...first, entries: saved, count: saved.length }
+  };
+}
+
 // 1. Text Entry Endpoint
 app.post('/api/entries/text', async (req, res) => {
   try {
@@ -137,33 +198,20 @@ app.post('/api/entries/text', async (req, res) => {
       return res.status(200).json(alreadyStored);
     }
 
-    const parsed = await parseTextWithGemini(text);
+    const language = await languageForBusiness(businessId);
+    const parsed = await parseTextWithGemini(text, { language });
     console.log("[TEXT PARSED SUCCESS]", parsed);
 
-    // Guard: reject entries Gemini couldn't assign a valid amount to,
-    // so bad data never reaches the DB and poisons report totals.
-    if (parsed.total === undefined || parsed.total === null || isNaN(Number(parsed.total))) {
-      console.warn("[BAD PARSE] Gemini returned no valid total (text):", parsed);
-      return res.status(422).json({ error: "Could not determine an amount for that entry", parsed });
-    }
-
-    const entry = new Entry({
-      business_id: businessId || 'demo-shop',
-      type: parsed.type,
-      item: parsed.item,
-      qty: parsed.qty,
-      unit_price: parsed.unit_price,
-      total: parsed.total,
-      transcription: parsed.transcription || text,
+    const result = await persistParsedItems({
+      parsed,
+      businessId,
       source: 'text',
-      matched: false,
-      client_id: clientId || undefined,
-      timestamp: resolveTimestamp(occurredAt)
+      clientId,
+      occurredAt,
+      fallbackText: text,
+      language
     });
-
-    const { entry: saved, duplicate } = await saveEntryIdempotently(entry, clientId);
-    if (!duplicate && clientId) await reconcileOfflineSale(saved);
-    res.status(duplicate ? 200 : 201).json(saved);
+    res.status(result.status).json(result.body);
   } catch (error) {
     console.error("Text entry endpoint error:", error);
     res.status(500).json({ error: "Failed to process text entry", details: error.message });
@@ -188,37 +236,20 @@ app.post('/api/entries/voice', upload.single('audio'), async (req, res) => {
     const mimeType = req.file.mimetype || 'audio/webm';
     console.log(`[VOICE UPLOADED] File size: ${req.file.size} bytes, Mime: ${mimeType}`);
 
-    const parsed = await parseAudioWithGemini(req.file.buffer, mimeType);
+    const language = await languageForBusiness(businessId);
+    const parsed = await parseAudioWithGemini(req.file.buffer, mimeType, { language });
     console.log("[AUDIO PARSED SUCCESS]", parsed);
 
-    if (parsed.error) {
-      return res.status(400).json({ error: parsed.error });
-    }
-
-    // Guard: reject entries Gemini couldn't assign a valid amount to,
-    // so bad data never reaches the DB and poisons report totals.
-    if (parsed.total === undefined || parsed.total === null || isNaN(Number(parsed.total))) {
-      console.warn("[BAD PARSE] Gemini returned no valid total (voice):", parsed);
-      return res.status(422).json({ error: "Could not determine an amount for that entry", parsed });
-    }
-
-    const entry = new Entry({
-      business_id: businessId || 'demo-shop',
-      type: parsed.type,
-      item: parsed.item,
-      qty: parsed.qty,
-      unit_price: parsed.unit_price,
-      total: parsed.total,
-      transcription: parsed.transcription || 'Spoken transaction',
+    const result = await persistParsedItems({
+      parsed,
+      businessId,
       source: 'voice',
-      matched: false,
-      client_id: clientId || undefined,
-      timestamp: resolveTimestamp(occurredAt)
+      clientId,
+      occurredAt,
+      fallbackText: parsed?.transcription || 'Spoken transaction',
+      language
     });
-
-    const { entry: saved, duplicate } = await saveEntryIdempotently(entry, clientId);
-    if (!duplicate && clientId) await reconcileOfflineSale(saved);
-    res.status(duplicate ? 200 : 201).json(saved);
+    res.status(result.status).json(result.body);
   } catch (error) {
     console.error("Voice entry endpoint error:", error);
     res.status(500).json({ error: "Failed to process voice entry", details: error.message });
@@ -378,18 +409,22 @@ app.post('/api/webhooks/tiara-mo', (req, res) => {
 // 6. Weekly Report Endpoint & SMS Trigger
 app.get('/api/reports/weekly', async (req, res) => {
   try {
-    const { businessId, phone, businessName } = req.query;
+    const { businessId, phone, businessName, date, sendSms } = req.query;
     const bid = businessId || 'demo-shop';
     const biz = await Business.findOne({ id: bid });
     const bname = biz?.name || businessName || 'My Duka';
     const language = normalizeReportLanguage(req.query.language || biz?.reportLanguage);
+    const day = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+    const period = day ? { start: day, end: day } : kenyaWeekRange();
+    const periodLabel = formatKenyaPeriod(period.start, period.end);
 
-    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid}) lang=${language}`);
+    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid}) lang=${language} period=${periodLabel}`);
 
-    const [entries, stockLots] = await Promise.all([
+    const [allEntries, stockLots] = await Promise.all([
       Entry.find({ business_id: bid }),
       Stock.find({ business_id: bid })
     ]);
+    const entries = filterEntriesByKenyaRange(allEntries, period.start, period.end);
 
     // Cash-basis totals keep the same formula as before. Item-level gross
     // profit is computed from stock unit costs and sits beside them.
@@ -397,12 +432,16 @@ app.get('/api/reports/weekly', async (req, res) => {
     const localized = await assembleLocalizedReport({
       report,
       businessName: bname,
+      shopPhone: biz?.phone || '',
+      tillNumber: biz?.tillNumber || '',
+      periodLabel,
+      title: day ? (REPORT_LABELS[language]?.dailyTitle || REPORT_LABELS.en.dailyTitle) : undefined,
       language,
       translate: translatePhrasesWithGemini
     });
 
     let smsStatus = null;
-    if (phone) {
+    if (phone && (sendSms === '1' || sendSms === 'true' || (!day && sendSms !== '0'))) {
       smsStatus = await sendSMS({ to: phone, message: localized.sms });
     }
 
@@ -412,6 +451,8 @@ app.get('/api/reports/weekly', async (req, res) => {
       labels: localized.labels,
       language: localized.language,
       languageFallback: localized.languageFallback,
+      period: { ...period, label: periodLabel },
+      shop: { name: bname, phone: biz?.phone || '', tillNumber: biz?.tillNumber || '' },
       smsStatus
     });
   } catch (error) {

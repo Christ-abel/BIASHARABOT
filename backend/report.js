@@ -127,6 +127,19 @@ export function formatItemProfitLines(report, labels, limit = 4) {
   return lines.join('\n');
 }
 
+export function formatSoldItemLines(report, labels, limit = 8) {
+  const rows = Array.isArray(report?.sold_items) ? report.sold_items : [];
+  if (!rows.length) return '';
+  const copy = labels || REPORT_LABELS.en;
+  const lines = [copy.productsSold];
+  for (const row of rows.slice(0, limit)) {
+    lines.push(
+      `  ${row.item}  ${row.qty} x ${formatKesAmount(row.unit_price)} = ${formatKesAmount(row.total)}`
+    );
+  }
+  return lines.join('\n');
+}
+
 /**
  * SMS / plain-text till slip. Amounts are always `KSh 0.00` so a language
  * change cannot move a decimal or rename the currency.
@@ -135,6 +148,10 @@ export function buildReportMessage({
   labels,
   title,
   businessName,
+  shopPhone,
+  tillNumber,
+  periodLabel,
+  soldLines,
   revenue,
   cost_of_goods,
   other_expenses,
@@ -144,10 +161,18 @@ export function buildReportMessage({
   itemProfitLines
 }) {
   const copy = labels || REPORT_LABELS.en;
+  const header = [
+    title || copy.weeklyTitle,
+    `${copy.shop}: ${businessName}`
+  ];
+  if (tillNumber) header.push(`${copy.till}: ${tillNumber}`);
+  if (shopPhone) header.push(`${copy.phone}: ${shopPhone}`);
+  if (periodLabel) header.push(`${copy.period}: ${periodLabel}`);
+  const soldBlock = soldLines ? `${soldLines}\n` : '';
   const profitBlock = itemProfitLines ? `${itemProfitLines}\n` : '';
-  return `${title || copy.weeklyTitle}\n` +
-    `${copy.shop}: ${businessName}\n` +
+  return `${header.join('\n')}\n` +
     `---------------------\n` +
+    soldBlock +
     `${copy.revenue}: ${formatKesAmount(revenue)}\n` +
     `${copy.costOfGoods}: ${formatKesAmount(cost_of_goods)}\n` +
     `${copy.otherExpenses}: ${formatKesAmount(other_expenses)}\n` +
@@ -163,6 +188,9 @@ export function buildReportMessage({
 export async function assembleLocalizedReport({
   report,
   businessName,
+  shopPhone,
+  tillNumber,
+  periodLabel,
   language,
   title,
   translate,
@@ -170,10 +198,15 @@ export async function assembleLocalizedReport({
 }) {
   const resolved = await resolveReportLabels(language, { translate, timeoutMs });
   const itemProfitLines = formatItemProfitLines(report, resolved.labels);
+  const soldLines = formatSoldItemLines(report, resolved.labels);
   const sms = buildReportMessage({
     labels: resolved.labels,
     title: title || resolved.labels.weeklyTitle,
     businessName,
+    shopPhone,
+    tillNumber,
+    periodLabel,
+    soldLines,
     ...report,
     itemProfitLines
   });
