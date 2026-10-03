@@ -21,8 +21,8 @@ const sampleEntries = [
 ];
 
 const swLabels = {
-  title_weekly: 'Ripoti ya Wiki ya BiasharaGPT',
-  title_daily: 'Ripoti ya Siku ya BiasharaGPT',
+  title_weekly: 'Ripoti ya Wiki ya BiasharaBot',
+  title_daily: 'Ripoti ya Siku ya BiasharaBot',
   shop: 'Duka',
   revenue: 'Mapato',
   cost_of_goods: 'Gharama ya Bidhaa',
@@ -31,7 +31,7 @@ const swLabels = {
   net_profit: 'Faida Halisi',
   outstanding_credit: 'Deni Linalodaiwa',
   printed_at: 'Imechapishwa tarehe',
-  footer: 'Inaendeshwa na BiasharaGPT!'
+  footer: 'Inaendeshwa na BiasharaBot!'
 };
 
 const amountsIn = (text) => text.match(/KSh -?\d+\.\d{2}/g) || [];
@@ -58,15 +58,15 @@ describe('computeReportFigures', () => {
 describe('buildReportMessage', () => {
   test('uses English labels by default and the weekly title', () => {
     const message = buildReportMessage({ businessName: 'My Duka', ...computeReportFigures(sampleEntries) });
-    assert.match(message, /^BiasharaGPT Weekly Report\n/);
+    assert.match(message, /^BiasharaBot Weekly Report\n/);
     assert.match(message, /Shop: My Duka/);
     assert.match(message, /Net Profit: KSh 915\.50/);
-    assert.match(message, /Powered by BiasharaGPT!$/);
+    assert.match(message, /Powered by BiasharaBot!$/);
   });
 
   test('switches title by label key', () => {
     const message = buildReportMessage({ title: 'title_daily', businessName: 'X', ...computeReportFigures([]) });
-    assert.match(message, /^BiasharaGPT Daily Report\n/);
+    assert.match(message, /^BiasharaBot Daily Report\n/);
   });
 
   test('keeps every KSh amount identical across languages', () => {

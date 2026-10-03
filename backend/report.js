@@ -22,8 +22,8 @@ export const isSupportedLanguage = (code) =>
 // Every string a report needs. Only these values are ever translated; keys,
 // numbers, currency and the business name are not.
 export const REPORT_LABELS_EN = Object.freeze({
-  title_weekly: 'BiasharaGPT Weekly Report',
-  title_daily: 'BiasharaGPT Daily Report',
+  title_weekly: 'BiasharaBot Weekly Report',
+  title_daily: 'BiasharaBot Daily Report',
   shop: 'Shop',
   revenue: 'Revenue',
   cost_of_goods: 'Cost of Goods',
@@ -32,7 +32,7 @@ export const REPORT_LABELS_EN = Object.freeze({
   net_profit: 'Net Profit',
   outstanding_credit: 'Outstanding Credit',
   printed_at: 'Printed at',
-  footer: 'Powered by BiasharaGPT!'
+  footer: 'Powered by BiasharaBot!'
 });
 
 export const REPORT_LABEL_KEYS = Object.freeze(Object.keys(REPORT_LABELS_EN));

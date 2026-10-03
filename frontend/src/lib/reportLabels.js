@@ -5,8 +5,8 @@
  * cached snapshot that pre-dates translated reports.
  */
 export const DEFAULT_REPORT_LABELS = Object.freeze({
-  title_weekly: 'BiasharaGPT Weekly Report',
-  title_daily: 'BiasharaGPT Daily Report',
+  title_weekly: 'BiasharaBot Weekly Report',
+  title_daily: 'BiasharaBot Daily Report',
   shop: 'Shop',
   revenue: 'Revenue',
   cost_of_goods: 'Cost of Goods',
@@ -15,7 +15,7 @@ export const DEFAULT_REPORT_LABELS = Object.freeze({
   net_profit: 'Net Profit',
   outstanding_credit: 'Outstanding Credit',
   printed_at: 'Printed at',
-  footer: 'Powered by BiasharaGPT!',
+  footer: 'Powered by BiasharaBot!',
 });
 
 /** Shown in the selector until GET /api/reports/languages answers. */

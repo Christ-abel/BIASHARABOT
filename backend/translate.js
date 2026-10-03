@@ -23,8 +23,8 @@ export const TRANSLATE_TIMEOUT_MS = 5000;
 // gemini.js, so a translated report can be seen locally without API charges.
 const MOCK_TRANSLATIONS = {
   sw: {
-    title_weekly: 'Ripoti ya Wiki ya BiasharaGPT',
-    title_daily: 'Ripoti ya Siku ya BiasharaGPT',
+    title_weekly: 'Ripoti ya Wiki ya BiasharaBot',
+    title_daily: 'Ripoti ya Siku ya BiasharaBot',
     shop: 'Duka',
     revenue: 'Mapato',
     cost_of_goods: 'Gharama ya Bidhaa',
@@ -33,7 +33,7 @@ const MOCK_TRANSLATIONS = {
     net_profit: 'Faida Halisi',
     outstanding_credit: 'Deni Linalodaiwa',
     printed_at: 'Imechapishwa tarehe',
-    footer: 'Inaendeshwa na BiasharaGPT!'
+    footer: 'Inaendeshwa na BiasharaBot!'
   }
 };
 
@@ -70,7 +70,7 @@ ${JSON.stringify(REPORT_LABELS_EN, null, 2)}
 Rules:
 - Return a JSON object with exactly the same keys and translated string values.
 - Keep translations short so they fit in an SMS.
-- Keep the product name "BiasharaGPT" and the word "M-Pesa" unchanged.
+- Keep the product name "BiasharaBot" and the word "M-Pesa" unchanged.
 - Do not add numbers, amounts, currency or any extra text.`;
 
   const result = await model.generateContent({
