@@ -96,8 +96,6 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return; // writes are queued by the app, never cached
 
   const url = new URL(request.url);
-  // Authenticated compliance responses must never enter the offline API cache.
-  if (url.pathname.startsWith('/api/compliance') || request.headers.has('Authorization')) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(handleNavigation(request));
