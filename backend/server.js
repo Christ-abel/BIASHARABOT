@@ -9,6 +9,13 @@ import { parseTextWithGemini, parseAudioWithGemini } from './gemini.js';
 import { triggerSTKPush } from './payments.js';
 import { sendSMS } from './sms.js';
 import {
+  SUPPORTED_LANGUAGES,
+  buildReportMessage,
+  computeReportFigures,
+  isSupportedLanguage
+} from './report.js';
+import { getReportLabels } from './translate.js';
+import {
   findByClientId,
   reconcileOfflineSale,
   resolveTimestamp,
@@ -294,77 +301,31 @@ app.post('/api/webhooks/tiara-mo', (req, res) => {
 });
 
 // 6. Weekly Report Endpoint & SMS Trigger
-function buildReportMessage({ title, businessName, revenue, cost_of_goods, other_expenses, mpesa_fees, net_profit, outstanding_credit }) {
-  return `${title}\n` +
-    `Shop: ${businessName}\n` +
-    `---------------------\n` +
-    `Revenue: KSh ${revenue.toFixed(2)}\n` +
-    `Cost of Goods: KSh ${cost_of_goods.toFixed(2)}\n` +
-    `Other Expenses: KSh ${other_expenses.toFixed(2)}\n` +
-    `M-Pesa Fees: KSh ${mpesa_fees.toFixed(2)}\n` +
-    `---------------------\n` +
-    `Net Profit: KSh ${net_profit.toFixed(2)}\n` +
-    `Outstanding Credit: KSh ${outstanding_credit.toFixed(2)}\n` +
-    `---------------------\n` +
-    `Powered by BiasharaBot!`;
-}
-
+// Figures and the message template live in report.js; label translation in
+// translate.js. The owner's reportLanguage decides the labels, the figures
+// are identical in every language.
 app.get('/api/reports/weekly', async (req, res) => {
   try {
     const { businessId, phone, businessName } = req.query;
     const bid = businessId || 'demo-shop';
     const bname = businessName || 'My Duka';
 
-    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid})`);
+    const biz = await Business.findOne({ id: bid }).select('reportLanguage');
+    const requestedLanguage = biz?.reportLanguage || 'en';
+
+    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid}) in "${requestedLanguage}"`);
 
     const entries = await Entry.find({ business_id: bid });
-
-    // Fix: coerce every total to a number with a 0 fallback. A single
-    // entry with a missing/undefined total previously turned these sums
-    // into NaN, which JSON.stringify silently converts to null — that
-    // null then crashed the frontend's .toFixed() calls.
-    const revenue = entries
-      .filter(e => e.type === 'sale')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const cost_of_goods = entries
-      .filter(e => e.type === 'purchase')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const other_expenses = entries
-      .filter(e => e.type === 'expense' && e.source !== 'payhero')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const mpesa_fees = entries
-      .filter(e => e.type === 'expense' && e.source === 'payhero')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const outstanding_credit = entries
-      .filter(e => e.type === 'credit' && !e.matched)
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const net_profit = revenue - cost_of_goods - other_expenses - mpesa_fees;
-
-    const report = {
-      revenue,
-      cost_of_goods,
-      other_expenses,
-      mpesa_fees,
-      net_profit,
-      outstanding_credit
-    };
+    const report = computeReportFigures(entries);
+    const { language, labels, fallback } = await getReportLabels(requestedLanguage);
 
     let smsStatus = null;
     if (phone) {
       const smsMessage = buildReportMessage({
-        title: 'BiasharaBot Weekly Report',
+        title: 'title_weekly',
         businessName: bname,
-        revenue,
-        cost_of_goods,
-        other_expenses,
-        mpesa_fees,
-        net_profit,
-        outstanding_credit
+        labels,
+        ...report
       });
 
       smsStatus = await sendSMS({ to: phone, message: smsMessage });
@@ -373,12 +334,24 @@ app.get('/api/reports/weekly', async (req, res) => {
     res.json({
       success: true,
       report,
+      language,
+      requestedLanguage,
+      languageFallback: fallback,
+      labels,
       smsStatus
     });
   } catch (error) {
     console.error("Weekly report endpoint error:", error);
     res.status(500).json({ error: "Failed to generate weekly report", details: error.message });
   }
+});
+
+// 6a. Supported report languages (drives the selector in the dashboard)
+app.get('/api/reports/languages', (req, res) => {
+  res.json({
+    default: 'en',
+    languages: Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => ({ code, name }))
+  });
 });
 
 // 6b. Schedule a Mock Daily Report SMS for 60 seconds later
@@ -396,7 +369,7 @@ app.post('/api/reports/daily/schedule-test', async (req, res) => {
     };
 
     const message = buildReportMessage({
-      title: 'BiasharaBot Daily Report',
+      title: 'title_daily',
       businessName,
       ...mockReport
     });
@@ -490,7 +463,8 @@ app.post('/api/business', async (req, res) => {
       name: business.name,
       phone: business.phone,
       email: business.email,
-      tillNumber: business.tillNumber
+      tillNumber: business.tillNumber,
+      reportLanguage: business.reportLanguage
     };
 
     res.status(201).json(responseBiz);
@@ -511,6 +485,37 @@ app.get('/api/business/:id', async (req, res) => {
   } catch (error) {
     console.error("Fetch business details error:", error);
     res.status(500).json({ error: "Failed to retrieve business profile" });
+  }
+});
+
+// 10. Update Business Settings Endpoint (currently: report language)
+app.patch('/api/business/:id', async (req, res) => {
+  try {
+    const { reportLanguage } = req.body || {};
+    if (reportLanguage === undefined) {
+      return res.status(400).json({ error: "Nothing to update" });
+    }
+    if (!isSupportedLanguage(reportLanguage)) {
+      return res.status(400).json({
+        error: `Unsupported report language. Choose one of: ${Object.keys(SUPPORTED_LANGUAGES).join(', ')}`
+      });
+    }
+
+    const business = await Business.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { reportLanguage } },
+      { new: true, runValidators: true }
+    ).select('-password');
+
+    if (!business) {
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    console.log(`[BUSINESS UPDATED] ID: ${business.id}, reportLanguage: ${business.reportLanguage}`);
+    res.json(business);
+  } catch (error) {
+    console.error("Update business settings error:", error);
+    res.status(500).json({ error: "Failed to update business settings" });
   }
 });
 
