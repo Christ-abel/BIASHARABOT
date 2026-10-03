@@ -3,6 +3,10 @@
 export const formatKsh = (amount) =>
   `KSh ${Number(amount || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 })}`;
 
+/** "30%" — returns an em dash when margin is unknown (no stock cost yet). */
+export const formatPercent = (value) =>
+  Number.isFinite(Number(value)) ? `${Math.round(Number(value))}%` : '—';
+
 /** Short relative time, e.g. "just now", "4 min ago", "yesterday 18:40". */
 export function timeAgo(iso) {
   if (!iso) return '';
