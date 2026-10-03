@@ -26,7 +26,7 @@ const NUMBER_WORDS = {
 };
 
 const TYPE_KEYWORDS = [
-  { type: 'credit', words: ['on credit', 'credit', 'deni', 'mkopo', 'owes', 'anadai', 'kwa deni'] },
+  { type: 'credit', words: ['on credit', 'credit', 'deni', 'mkopo', 'owes', 'anadai', 'kwa deni', 'kopesha', 'nimekopesha', 'nimemkopesha'] },
   { type: 'purchase', words: ['bought', 'buy', 'stock', 'restock', 'supplier', 'nilinunua', 'kununua', 'nunua'] },
   { type: 'expense', words: ['paid', 'expense', 'rent', 'kodi', 'transport', 'fare', 'nililipa', 'malipo', 'salary', 'mshahara', 'electricity', 'stima'] },
   { type: 'sale', words: ['sold', 'sale', 'sell', 'niliuza', 'nimeuza', 'kuuza', 'uza', 'mauzo'] },
@@ -44,6 +44,9 @@ const TYPE_SKIP = new Set(
 
 const PACK_SIZE = /^\d+(?:\.\d+)?(?:kg|g|l|ml|ltr|litre|litres|pkt|pcs|pc)$/i;
 const DIGITS = /^\d+(?:\.\d+)?$/;
+const KENYAN_PHONE = /(?:\+?254|0)[\s-]*(?:7|1)(?:[\s-]*\d){8}/g;
+const LEND_TWO_WORDS = /\b(?:kopesha|nimekopesha|nimemkopesha)\s+([A-Za-z][A-Za-z']*)\s+([A-Za-z][A-Za-z0-9.]*)/i;
+const CREDIT_FOR_NAME = /\b(?:on credit (?:to|for)|credit (?:to|for)|deni (?:ya|kwa)|for)\s+([A-Za-z][A-Za-z']*)\b/i;
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -70,11 +73,40 @@ function titleCase(name) {
     .join(' ') || 'Sale';
 }
 
+function normalizePhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+  if (digits.length === 9) return `254${digits}`;
+  return '';
+}
+
+function peelCreditParty(text) {
+  const phoneMatch = String(text || '').match(KENYAN_PHONE);
+  const phone = phoneMatch ? normalizePhone(phoneMatch[0]) : '';
+  let rest = String(text || '').replace(KENYAN_PHONE, ' ').replace(/\s+/g, ' ').trim();
+  let name = '';
+  const lend = rest.match(LEND_TWO_WORDS);
+  if (lend) {
+    name = titleCase(lend[1]);
+    rest = rest.replace(new RegExp(`\\b${lend[1]}\\b`, 'i'), ' ');
+  } else {
+    const named = rest.match(CREDIT_FOR_NAME);
+    const maybe = named?.[1]?.toLowerCase();
+    if (named && maybe && !SKIP.has(maybe) && !TYPE_SKIP.has(maybe)) {
+      name = titleCase(named[1]);
+      rest = rest.replace(named[0], ' ');
+    }
+  }
+  return { phone, name, rest: rest.replace(/\s+/g, ' ').trim() };
+}
+
 export function parseTransactionsLocally(text) {
   if (!text || !text.trim()) return [];
   const trimmed = text.trim();
   const type = detectType(trimmed.toLowerCase());
-  const tokens = trimmed.replace(/[;/|]+/g, ' , ').split(/(\s+|,)/).map((part) => part.trim()).filter((part) => part && part !== ',');
+  const party = type === 'credit' ? peelCreditParty(trimmed) : { phone: '', name: '', rest: trimmed };
+  const tokens = (party.rest || trimmed).replace(/[;/|]+/g, ' , ').split(/(\s+|,)/).map((part) => part.trim()).filter((part) => part && part !== ',');
   const items = [];
   let nameParts = [];
   let pendingQty = null;
@@ -91,6 +123,8 @@ export function parseTransactionsLocally(text) {
       unit_price: unit,
       total: round2(qty * unit),
       transcription: trimmed,
+      customer_name: type === 'credit' ? party.name : '',
+      customer_phone: type === 'credit' ? party.phone : '',
     });
     nameParts = [];
     pendingQty = null;
@@ -121,7 +155,8 @@ export function parseTransactionsLocally(text) {
 /**
  * @param {string} text
  * @returns {{type: string, item: string, qty: number, unit_price: number,
- *            total: number, transcription: string} | null}
+ *            total: number, transcription: string, customer_name?: string,
+ *            customer_phone?: string} | null}
  */
 export function parseTransactionLocally(text) {
   const rows = parseTransactionsLocally(text);
@@ -134,5 +169,7 @@ export function parseTransactionLocally(text) {
     unit_price: round2(rows.reduce((sum, row) => sum + row.total, 0) / rows.reduce((sum, row) => sum + row.qty, 0)),
     total: round2(rows.reduce((sum, row) => sum + row.total, 0)),
     transcription: text.trim(),
+    customer_name: rows[0].customer_name || '',
+    customer_phone: rows[0].customer_phone || '',
   };
 }

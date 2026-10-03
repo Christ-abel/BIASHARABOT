@@ -94,14 +94,15 @@ Return JSON only:
 {
   "transcription": string,
   "items": [
-    { "type": "sale" | "purchase" | "expense" | "credit", "item": string, "qty": number, "unit_price": number, "total": number }
+    { "type": "sale" | "purchase" | "expense" | "credit", "item": string, "qty": number, "unit_price": number, "total": number, "customer_name"?: string, "customer_phone"?: string }
   ]
 }
 
 Rules:
 - One spoken or typed line can list SEVERAL products. "Ugali twenty bob, nyama thirty bob" is TWO sales: Ugali qty 1 at 20, Nyama qty 1 at 30.
 - Keep the product name the owner said (Ugali, nyama, sukari). Do not rename ugali to maize flour.
-- Default type is sale unless they said bought/nunua (purchase), rent/stima (expense), or deni/credit.
+- Default type is sale unless they said bought/nunua (purchase), rent/stima (expense), or deni/credit/kopesha (credit).
+- Credit lines often name the customer and their phone: "kopesha mama sugar 50 0712345678" is Sugar qty 1 at 50, customer_name Mama, customer_phone 0712345678. Never use the phone as the price.
 - qty defaults to 1 when they only name a price. total = qty × unit_price.
 - Pack sizes like 2kg stay in the item name. "sold 3 sugar 2kg at 280" is sugar 2kg, qty 3, unit_price 280.
 - transcription is what they said, in the language they used.

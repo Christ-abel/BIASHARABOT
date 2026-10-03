@@ -10,6 +10,7 @@ import {
 import { formatKsh, formatPercent, timeAgo } from './lib/format.js';
 import { entriesOnKenyaDate, groupByItem, kenyaDayOf, todayKenya } from './lib/dates.js';
 import { attachSaleProfits } from './lib/item-profit.js';
+import { audioFileName, openShopMic, pickAudioMime } from './lib/voice.js';
 import { useOfflineSync } from './hooks/useOfflineSync.js';
 import ConnectionBar from './components/ConnectionBar.jsx';
 import PendingEntries from './components/PendingEntries.jsx';
@@ -25,25 +26,23 @@ import DateFilter from './components/DateFilter.jsx';
 // passing stale figures off as live ones.
 const servedFromCache = (response) => response.headers.get('X-Biashara-From-Cache') === '1';
 
-const pickAudioMime = () => {
-  if (typeof MediaRecorder === 'undefined') return '';
-  const types = ['audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
-  return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
-};
-
-const audioFileName = (mime) => {
-  if (String(mime).includes('ogg')) return 'voice_note.ogg';
-  if (String(mime).includes('mp4')) return 'voice_note.m4a';
-  return 'voice_note.webm';
-};
-
 const describeLogged = (payload) => {
   const rows = Array.isArray(payload?.entries) && payload.entries.length ? payload.entries : [payload];
   const lines = rows
     .filter(Boolean)
     .map((row) => row.transcription || `${row.item} (${row.qty} × ${formatKsh(row.unit_price)})`);
-  if (lines.length === 1) return `Logged: ${lines[0]}`;
-  return `Logged ${lines.length} items: ${lines.join(' · ')}`;
+  const base = lines.length === 1 ? `Logged: ${lines[0]}` : `Logged ${lines.length} items: ${lines.join(' · ')}`;
+  const credits = rows.filter((row) => row?.type === 'credit');
+  if (!credits.length) return base;
+  return credits.some((row) => row.customer_phone)
+    ? `${base} We will SMS them after 3 days if they have not paid, so you can restock.`
+    : `${base} Say their number next time so we can SMS them after 3 days.`;
+};
+
+const daysSince = (timestamp) => {
+  const then = new Date(timestamp).getTime();
+  if (!Number.isFinite(then)) return 0;
+  return Math.max(0, Math.floor((Date.now() - then) / (24 * 60 * 60 * 1000)));
 };
 
 // Home-screen shortcuts in the manifest deep-link with ?tab=...
@@ -133,6 +132,7 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const mediaRecorderRef = useRef(null);
+  const voiceSessionRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
   // Duration also lives in a ref: MediaRecorder's onstop closure would
@@ -144,6 +144,7 @@ export default function App() {
   const [stkEntryId, setStkEntryId] = useState(null);
   const [stkPhone, setStkPhone] = useState('');
   const [stkLoading, setStkLoading] = useState(false);
+  const [settlingCreditId, setSettlingCreditId] = useState(null);
 
   // Weekly Report State
   const [report, setReport] = useState(null);
@@ -474,13 +475,12 @@ export default function App() {
     setError(null);
     setSuccess(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
-      });
+      const session = await openShopMic();
+      voiceSessionRef.current = session;
       const mimeType = pickAudioMime();
       const mediaRecorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
+        ? new MediaRecorder(session.recordStream, { mimeType })
+        : new MediaRecorder(session.recordStream);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
@@ -490,12 +490,11 @@ export default function App() {
       };
 
       mediaRecorder.onstop = async () => {
-        // Prefer ogg/mp4 when the browser can produce them — Gemini reads those
-        // more reliably than a bare webm container.
         const recordedType = mediaRecorder.mimeType || mimeType || 'audio/webm';
         const audioBlob = new Blob(audioChunksRef.current, { type: recordedType.split(';')[0] });
+        voiceSessionRef.current?.stop();
+        voiceSessionRef.current = null;
         await uploadAudio(audioBlob, durationRef.current);
-        stream.getTracks().forEach((track) => track.stop());
       };
 
       mediaRecorder.start(250);
@@ -508,6 +507,8 @@ export default function App() {
         setRecordingDuration(durationRef.current);
       }, 1000);
     } catch (err) {
+      voiceSessionRef.current?.stop();
+      voiceSessionRef.current = null;
       setError('Microphone access denied or not supported.');
       console.error(err);
     }
@@ -614,6 +615,33 @@ export default function App() {
   const handleAdminLock = () => {
     setIsAdminAuthenticated(false);
     sessionStorage.removeItem('biashara_admin_auth');
+  };
+
+  const handleSettleCredit = async (entryId) => {
+    if (isOffline()) {
+      setError('Marking a debt paid needs network.');
+      return;
+    }
+    setSettlingCreditId(entryId);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/entries/${entryId}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessId: business.id })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error || 'Could not mark that debt as paid');
+        return;
+      }
+      setSuccess(`Paid: ${data.item} ${formatKsh(data.total)}. Reminders will stop.`);
+      fetchEntries();
+    } catch {
+      setError('Could not mark that debt as paid');
+    } finally {
+      setSettlingCreditId(null);
+    }
   };
 
   // STK Push Triggering
@@ -735,6 +763,9 @@ export default function App() {
   );
   const boughtOnDay = groupByItem(dayEntries.filter((row) => row.type === 'purchase'));
   const adminEntries = entriesOnKenyaDate(entries, ledgerDate);
+  const outstandingCredits = entries
+    .filter((row) => row.type === 'credit' && !row.matched)
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
   // Unmatched entries list for webhook simulator dropdown
   const unmatchedSales = entries.filter((e) => e.type === 'sale' && !e.matched && e.source !== 'payhero');
@@ -1051,7 +1082,7 @@ export default function App() {
             <div className="logger-card torn-divider-bottom">
               <h3>Log New Transaction</h3>
               <p style={{ fontSize: '13px', color: '#5A524E', marginBottom: '16px' }}>
-                Speak each item with its price, for example: “Ugali twenty bob, nyama thirty bob”. Or type the same below.
+                Hold the phone close and speak each item with its price, for example: “Ugali twenty bob, nyama thirty bob”. To lend: “kopesha mama sugar fifty 0712…”. After 3 days we SMS them to pay so you can restock. Or type the same below.
               </p>
 
               {!online && (
@@ -1080,7 +1111,7 @@ export default function App() {
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="e.g. sold 10 loaves at 50 each..."
+                  placeholder="e.g. kopesha mama sugar 50 0712345678"
                   value={textEntry}
                   onChange={(e) => setTextEntry(e.target.value)}
                   disabled={loading || isRecording}
@@ -1101,6 +1132,45 @@ export default function App() {
               onRetry={retryOutboxItem}
               onDiscard={discardOutboxItem}
             />
+
+            {outstandingCredits.length > 0 && (
+              <div className="credit-book">
+                <h3>Money on credit</h3>
+                <p>
+                  Customers who took goods to pay later. After 3 days we SMS them so this money is back before you buy stock.
+                </p>
+                <div className="credit-list">
+                  {outstandingCredits.map((row) => {
+                    const days = daysSince(row.timestamp);
+                    return (
+                      <div className="credit-row" key={row._id}>
+                        <div>
+                          <strong>{row.item}</strong>
+                          <span>
+                            {row.customer_name || 'Customer'}
+                            {row.customer_phone ? ` · ${row.customer_phone}` : ' · no number yet'}
+                            {' · '}
+                            {days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`}
+                            {days >= 3 ? ' · reminder due' : ''}
+                          </span>
+                        </div>
+                        <div className="credit-row-actions">
+                          <span className="mono">{formatKsh(row.total)}</span>
+                          <button
+                            type="button"
+                            className="btn-settle"
+                            disabled={settlingCreditId === row._id || !online}
+                            onClick={() => handleSettleCredit(row._id)}
+                          >
+                            {settlingCreditId === row._id ? 'Saving…' : 'Mark paid'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div style={{ textAlign: 'center', marginTop: '30px', color: 'var(--color-gray-dark)', fontSize: '13px' }}>
               ℹ️ Transaction history and developer simulations have been relocated to the protected <strong>Admin Ledger</strong> tab.
@@ -1426,6 +1496,15 @@ export default function App() {
                               <span style={{ textTransform: 'capitalize', fontWeight: 'bold' }}>
                                 {entry.type}
                               </span>
+                              {entry.type === 'credit' && (entry.customer_name || entry.customer_phone) && (
+                                <>
+                                  <span>•</span>
+                                  <span>
+                                    {entry.customer_name || 'Customer'}
+                                    {entry.customer_phone ? ` ${entry.customer_phone}` : ''}
+                                  </span>
+                                </>
+                              )}
                               <span>•</span>
                               <span className={maskSensitiveData ? 'privacy-blurred' : ''} title="Hover to view calculation details">
                                 {entry.qty} x KSh {entry.unit_price}
@@ -1453,6 +1532,22 @@ export default function App() {
                                 ) : (
                                   <span className="status-pending" onClick={() => openStkModal(entry._id)}>
                                     Request STK Push
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {entry.type === 'credit' && (
+                              <div className="payment-status">
+                                {entry.matched ? (
+                                  <span className="status-matched">
+                                    <CheckIcon /> Paid
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="status-pending"
+                                    onClick={() => handleSettleCredit(entry._id)}
+                                  >
+                                    {settlingCreditId === entry._id ? 'Saving…' : 'Mark paid'}
                                   </span>
                                 )}
                               </div>

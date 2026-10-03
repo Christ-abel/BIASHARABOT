@@ -6,6 +6,7 @@
  * like 2kg, and Swahili sale verbs are first-class.
  */
 
+import { normalizePhone } from './auth.js';
 import { normalizeReportLanguage } from './languages.js';
 
 export const NUMBER_WORDS = {
@@ -35,7 +36,7 @@ export const NUMBER_WORDS = {
 };
 
 const TYPE_KEYWORDS = [
-  { type: 'credit', words: ['on credit', 'credit', 'deni', 'mkopo', 'owes', 'anadai', 'kwa deni'] },
+  { type: 'credit', words: ['on credit', 'credit', 'deni', 'mkopo', 'owes', 'anadai', 'kwa deni', 'kopesha', 'nimekopesha', 'nimemkopesha'] },
   { type: 'purchase', words: ['bought', 'buy', 'stock', 'restock', 'supplier', 'nilinunua', 'kununua', 'nunua', 'nimenunua'] },
   { type: 'expense', words: ['paid', 'expense', 'rent', 'kodi', 'transport', 'fare', 'nililipa', 'malipo', 'salary', 'mshahara', 'electricity', 'stima', 'water bill'] },
   { type: 'sale', words: ['sold', 'sale', 'sell', 'niliuza', 'nimeuza', 'kuuza', 'uza', 'mauzo'] }
@@ -54,6 +55,9 @@ const TYPE_SKIP = new Set(
 const PACK_SIZE = /^\d+(?:\.\d+)?(?:kg|g|l|ml|ltr|litre|litres|pkt|pcs|pc)$/i;
 const DIGITS = /^\d+(?:\.\d+)?$/;
 const ENTRY_TYPES = new Set(['sale', 'purchase', 'expense', 'credit']);
+const KENYAN_PHONE = /(?:\+?254|0)[\s-]*(?:7|1)(?:[\s-]*\d){8}/g;
+const LEND_TWO_WORDS = /\b(?:kopesha|nimekopesha|nimemkopesha)\s+([A-Za-z][A-Za-z']*)\s+([A-Za-z][A-Za-z0-9.]*)/i;
+const CREDIT_FOR_NAME = /\b(?:on credit (?:to|for)|credit (?:to|for)|deni (?:ya|kwa)|for)\s+([A-Za-z][A-Za-z']*)\b/i;
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
@@ -79,6 +83,52 @@ function titleCase(name) {
     .filter(Boolean)
     .map((word) => (PACK_SIZE.test(word) ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()))
     .join(' ') || 'Sale';
+}
+
+export function extractKenyanPhone(text) {
+  const match = String(text || '').match(KENYAN_PHONE);
+  return match ? normalizePhone(match[0]) : '';
+}
+
+export function stripKenyanPhones(text) {
+  return String(text || '').replace(KENYAN_PHONE, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Pull the borrower off a deni line so "kopesha mama sugar 50 0712…"
+ * becomes customer Mama + Sugar 50, not an item named Mama Sugar.
+ */
+export function peelCreditParty(text) {
+  const phone = extractKenyanPhone(text);
+  let rest = stripKenyanPhones(text);
+  let name = '';
+
+  const lend = rest.match(LEND_TWO_WORDS);
+  if (lend) {
+    name = titleCase(lend[1]);
+    rest = rest.replace(new RegExp(`\\b${lend[1]}\\b`, 'i'), ' ');
+  } else {
+    const named = rest.match(CREDIT_FOR_NAME);
+    const maybe = named?.[1]?.toLowerCase();
+    if (named && maybe && !SKIP.has(maybe) && !TYPE_SKIP.has(maybe)) {
+      name = titleCase(named[1]);
+      rest = rest.replace(named[0], ' ');
+    }
+  }
+
+  return { phone, name, rest: rest.replace(/\s+/g, ' ').trim() };
+}
+
+function attachCreditParty(entry, originalText) {
+  if (entry.type !== 'credit') return entry;
+  const party = peelCreditParty(originalText);
+  const phone = normalizePhone(entry.customer_phone || party.phone || '');
+  const looksPhone = /^254[17]\d{8}$/.test(phone);
+  return {
+    ...entry,
+    customer_name: String(entry.customer_name || party.name || '').trim(),
+    customer_phone: looksPhone ? phone : ''
+  };
 }
 
 function tokenize(text) {
@@ -112,7 +162,8 @@ export function parseShopTalk(text) {
   if (!trimmed) return [];
 
   const type = detectEntryType(trimmed);
-  const tokens = tokenize(trimmed);
+  const party = type === 'credit' ? peelCreditParty(trimmed) : { phone: '', name: '', rest: trimmed };
+  const tokens = tokenize(party.rest || trimmed);
   const items = [];
   let nameParts = [];
   let pendingQty = null;
@@ -156,7 +207,9 @@ export function parseShopTalk(text) {
     }
   }
 
-  return items;
+  return type === 'credit'
+    ? items.map((row) => attachCreditParty(row, trimmed))
+    : items;
 }
 
 export function phraseEntry(entry, language) {
@@ -173,7 +226,10 @@ export function phraseEntry(entry, language) {
         : `Nimenunua ${item} ${qty} kwa KSh ${price} kila moja`;
     }
     if (type === 'expense') return `Gharama: ${item} KSh ${round2(entry.total)}`;
-    if (type === 'credit') return `${item} kwa deni KSh ${round2(entry.total)}`;
+    if (type === 'credit') {
+      const who = entry.customer_name ? ` kwa ${entry.customer_name},` : '';
+      return `${item} kwa deni${who} KSh ${round2(entry.total)}`;
+    }
     return qty === 1
       ? `${item} iliuza kwa KSh ${price}`
       : `Nimeuza ${item} ${qty} kwa KSh ${price} kila moja`;
@@ -185,7 +241,10 @@ export function phraseEntry(entry, language) {
       : `Bought ${qty} ${item} at KSh ${price} each`;
   }
   if (type === 'expense') return `Expense: ${item} KSh ${round2(entry.total)}`;
-  if (type === 'credit') return `${item} on credit for KSh ${round2(entry.total)}`;
+  if (type === 'credit') {
+    const who = entry.customer_name ? ` for ${entry.customer_name},` : ' for';
+    return `${item} on credit${who} KSh ${round2(entry.total)}`;
+  }
   return qty === 1
     ? `${item} was sold for KSh ${price}`
     : `Sold ${qty} ${item} at KSh ${price} each`;
@@ -226,10 +285,15 @@ export function coerceParsedEntries(parsed, originalText = '', language = 'en') 
       unit_price: round2(safeUnit),
       total: round2(safeTotal)
     };
-    entry.transcription = row.transcription && String(row.transcription).trim()
+    const withParty = attachCreditParty({
+      ...entry,
+      customer_name: row.customer_name,
+      customer_phone: row.customer_phone
+    }, originalText);
+    withParty.transcription = row.transcription && String(row.transcription).trim()
       ? String(row.transcription).trim()
-      : phraseEntry(entry, language);
-    cleaned.push(entry);
+      : phraseEntry(withParty, language);
+    cleaned.push(withParty);
   }
   return cleaned;
 }

@@ -4,6 +4,7 @@ import {
   attachPhrases,
   coerceParsedEntries,
   parseShopTalk,
+  peelCreditParty,
   phraseEntry
 } from '../parse-entry.js';
 
@@ -51,6 +52,45 @@ describe('Kenyan shop-talk parser', () => {
     assert.equal(sw, 'Ugali iliuza kwa KSh 20');
     const phrases = attachPhrases(parseShopTalk('Ugali twenty bob'), 'en');
     assert.equal(phrases[0].transcription, 'Ugali was sold for KSh 20');
+  });
+
+  it('reads kopesha mama sugar 50 with a Kenyan phone as credit', () => {
+    const [row] = parseShopTalk('kopesha mama sugar 50 0712345678');
+    assert.equal(row.type, 'credit');
+    assert.equal(row.item, 'Sugar');
+    assert.equal(row.unit_price, 50);
+    assert.equal(row.customer_name, 'Mama');
+    assert.equal(row.customer_phone, '254712345678');
+  });
+
+  it('reads sugar 50 on credit for Amina', () => {
+    const [row] = parseShopTalk('sugar 50 on credit for Amina 0112345678');
+    assert.equal(row.type, 'credit');
+    assert.equal(row.item, 'Sugar');
+    assert.equal(row.unit_price, 50);
+    assert.equal(row.customer_name, 'Amina');
+    assert.equal(row.customer_phone, '254112345678');
+  });
+
+  it('does not treat the product as the customer on nimekopesha sugar 50', () => {
+    const party = peelCreditParty('nimekopesha sugar 50');
+    assert.equal(party.name, '');
+    const [row] = parseShopTalk('nimekopesha sugar 50');
+    assert.equal(row.type, 'credit');
+    assert.equal(row.item, 'Sugar');
+    assert.equal(row.customer_name, '');
+  });
+
+  it('names the customer on a credit phrase', () => {
+    const en = phraseEntry({
+      type: 'credit',
+      item: 'Sugar',
+      qty: 1,
+      unit_price: 50,
+      total: 50,
+      customer_name: 'Mama'
+    }, 'en');
+    assert.equal(en, 'Sugar on credit for Mama, KSh 50');
   });
 
   it('accepts a Gemini-style items array', () => {

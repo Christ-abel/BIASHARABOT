@@ -22,6 +22,7 @@ import { dispatchComplianceNotices, phraseCompliance } from './compliance-notice
 import ComplianceNotice from './models/ComplianceNotice.js';
 import { triggerSTKPush } from './payments.js';
 import { sendSMS } from './sms.js';
+import { runCreditReminders } from './credit-reminders.js';
 import {
   findByClientId,
   reconcileOfflineSale,
@@ -168,6 +169,8 @@ async function persistParsedItems({ parsed, businessId, source, clientId, occurr
       transcription: row.transcription || spoken,
       source,
       matched: false,
+      customer_name: row.customer_name || '',
+      customer_phone: row.customer_phone || '',
       client_id: cid,
       timestamp: resolveTimestamp(occurredAt)
     });
@@ -266,6 +269,26 @@ app.get('/api/entries', async (req, res) => {
   } catch (error) {
     console.error("Get entries error:", error);
     res.status(500).json({ error: "Failed to fetch entries" });
+  }
+});
+
+// Customer paid the deni — stop the 3-day SMS chase.
+app.post('/api/entries/:id/settle', async (req, res) => {
+  try {
+    const { businessId } = req.body || {};
+    const entry = await Entry.findById(req.params.id);
+    if (!entry || (businessId && entry.business_id !== businessId)) {
+      return res.status(404).json({ error: 'Credit entry not found' });
+    }
+    if (entry.type !== 'credit') {
+      return res.status(400).json({ error: 'Only credit can be marked paid this way' });
+    }
+    entry.matched = true;
+    await entry.save();
+    res.json(entry);
+  } catch (error) {
+    console.error('Settle credit error:', error);
+    res.status(500).json({ error: 'Failed to mark that debt as paid' });
   }
 });
 
@@ -881,8 +904,37 @@ app.get('/api/stock', async (req, res) => {
   }
 });
 
+// Unpaid credit older than three days: SMS the customer (or the shop if
+// no client number). Render can hit this from a cron on a sleeping dyno.
+app.post('/api/reminders/run', async (req, res) => {
+  try {
+    const secret = process.env.REMINDER_CRON_KEY;
+    if (secret && req.headers['x-reminder-key'] !== secret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const result = await runCreditReminders();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Credit reminder run failed:', error);
+    res.status(500).json({ error: 'Failed to send credit reminders' });
+  }
+});
+
+const REMINDER_TICK_MS = 6 * 60 * 60 * 1000;
+
+function scheduleCreditReminders() {
+  const kick = () => {
+    runCreditReminders().catch((error) => {
+      console.error('[CREDIT REMINDER] sweep failed:', error.message || error);
+    });
+  };
+  setTimeout(kick, 45 * 1000);
+  setInterval(kick, REMINDER_TICK_MS);
+}
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`BiasharaBot Server running on http://localhost:${PORT}`);
+  scheduleCreditReminders();
 });
 // Nodemon trigger change
