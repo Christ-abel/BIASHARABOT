@@ -1224,6 +1224,33 @@ header p {
   cursor: wait;
 }
 
+.stock-upload-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.stock-upload-actions .btn {
+  width: 100%;
+  padding: 12px 10px;
+  font-size: 14px;
+}
+
+.webcam-card {
+  max-width: 520px;
+}
+
+.webcam-preview {
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #111;
+  margin: 8px 0 4px;
+}
+
 .stock-dropzone-icon {
   width: 44px;
   height: 44px;

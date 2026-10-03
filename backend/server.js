@@ -40,18 +40,52 @@ app.use(express.json());
 // Memory storage for audio and receipt uploads (prevents disk clutter)
 const upload = multer({ storage: multer.memoryStorage() });
 
-const RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
-const RECEIPT_TYPES = /^(image\/(jpeg|jpg|png|webp|heic|heif)|application\/pdf)$/i;
+const RECEIPT_MAX_BYTES = 15 * 1024 * 1024;
+const RECEIPT_TYPES = /^(image\/(jpeg|jpg|pjpeg|png|webp|heic|heif|gif|bmp)|application\/(pdf|octet-stream))$/i;
+
+/**
+ * Phone cameras often send no mime type, "octet-stream", or HEIC.
+ * Rejecting those is what made "take a photo" look like it could not submit.
+ */
+function receiptLooksUsable(file) {
+  const mime = String(file?.mimetype || '').toLowerCase();
+  const name = String(file?.originalname || '').toLowerCase();
+  if (!mime || mime === 'application/octet-stream') return true;
+  if (RECEIPT_TYPES.test(mime)) return true;
+  if (mime.startsWith('image/')) return true;
+  return /\.(jpe?g|png|webp|gif|bmp|heic|heif|pdf)$/.test(name);
+}
+
+function sniffReceiptMime(file) {
+  const declared = String(file?.mimetype || '').toLowerCase();
+  if (declared === 'image/jpg' || declared === 'image/pjpeg') return 'image/jpeg';
+  if (declared && declared !== 'application/octet-stream' && RECEIPT_TYPES.test(declared)) {
+    return declared;
+  }
+  const buf = file?.buffer;
+  if (buf && buf.length >= 4) {
+    if (buf[0] === 0xFF && buf[1] === 0xD8) return 'image/jpeg';
+    if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png';
+    if (buf[0] === 0x25 && buf[1] === 0x50) return 'application/pdf';
+    if (buf[0] === 0x52 && buf[1] === 0x49) return 'image/webp';
+  }
+  const name = String(file?.originalname || '').toLowerCase();
+  if (name.endsWith('.png')) return 'image/png';
+  if (name.endsWith('.pdf')) return 'application/pdf';
+  if (name.endsWith('.webp')) return 'image/webp';
+  if (name.endsWith('.heic') || name.endsWith('.heif')) return 'image/heic';
+  return 'image/jpeg';
+}
 
 const receiptUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: RECEIPT_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
-    if (RECEIPT_TYPES.test(file.mimetype)) {
+    if (receiptLooksUsable(file)) {
       cb(null, true);
       return;
     }
-    cb(new Error('Receipt must be a photo (JPG, PNG, WebP) or a PDF scan'));
+    cb(new Error('Receipt must be a photo or a PDF scan'));
   }
 });
 
@@ -638,8 +672,9 @@ app.post('/api/stock/receipt/parse', acceptReceiptFile, async (req, res) => {
       return res.status(400).json({ error: 'A receipt photo or PDF is required' });
     }
 
-    const mimeType = req.file.mimetype || 'image/jpeg';
-    console.log(`[RECEIPT UPLOADED] ${req.file.size} bytes, ${mimeType}`);
+    const mimeType = sniffReceiptMime(req.file);
+    req.file.mimetype = mimeType;
+    console.log(`[RECEIPT UPLOADED] ${req.file.size} bytes, ${mimeType} (${req.file.originalname || 'unnamed'})`);
 
     const parsed = await parseReceiptWithGemini(req.file.buffer, mimeType);
     console.log('[RECEIPT PARSED]', parsed);

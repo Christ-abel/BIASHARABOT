@@ -8,6 +8,58 @@ const emptyRow = () => ({ item: '', qty: '', unit_cost: '', total: '' });
 
 const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
 
+const MAX_RECEIPT_EDGE = 1600;
+const JPEG_QUALITY = 0.82;
+
+/**
+ * Phone cameras send HEIC, huge files, or no mime type. Turn whatever we
+ * got into a JPEG the backend and Gemini can actually read.
+ */
+async function prepareReceiptFile(file) {
+  if (!file) return null;
+  const name = (file.name || '').toLowerCase();
+  if (file.type === 'application/pdf' || name.endsWith('.pdf')) return file;
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_RECEIPT_EDGE / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+    if (typeof bitmap.close === 'function') bitmap.close();
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY));
+    if (blob && blob.size > 0) {
+      return new File([blob], 'receipt.jpg', { type: 'image/jpeg' });
+    }
+  } catch {
+    // HEIC on some Androids cannot be decoded here — send the original.
+  }
+
+  const type = file.type && file.type !== 'application/octet-stream' ? file.type : 'image/jpeg';
+  const filename = name && name.includes('.') ? file.name : 'receipt.jpg';
+  return new File([file], filename, { type });
+}
+
+function isPhoneLike() {
+  if (typeof navigator === 'undefined') return false;
+  if (navigator.userAgentData?.mobile) return true;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+async function readJsonSafe(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: response.ok ? 'Unexpected response from the receipt reader' : `Could not reach the stock API (${response.status})` };
+  }
+}
+
 /**
  * Stock tab: upload a supplier receipt (Gemini reads it), review the lines,
  * or type a purchase in when there is no slip. Nothing is written until the
@@ -16,7 +68,12 @@ const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
  */
 export default function StockPanel({ business, online, onSaved, onError, onSuccess }) {
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
   const [lots, setLots] = useState([]);
+  const [webcamOpen, setWebcamOpen] = useState(false);
+  const [webcamReady, setWebcamReady] = useState(false);
   const [loadingLots, setLoadingLots] = useState(false);
 
   const [parsing, setParsing] = useState(false);
@@ -42,14 +99,76 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
     }
   };
 
+  const stopWebcam = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setWebcamReady(false);
+    setWebcamOpen(false);
+  };
+
+  const startWebcam = async () => {
+    onError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      onError('This browser cannot open the webcam. Use Choose file and pick a picture of the receipt.');
+      fileInputRef.current?.click();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      streamRef.current = stream;
+      setWebcamOpen(true);
+      setWebcamReady(false);
+    } catch {
+      onError('Webcam permission was denied or no camera was found. Use Choose file instead.');
+      fileInputRef.current?.click();
+    }
+  };
+
+  const snapWebcam = async () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    stopWebcam();
+    if (!blob) {
+      onError('Could not capture that frame. Try Choose file.');
+      return;
+    }
+    await handleFile(new File([blob], 'receipt.jpg', { type: 'image/jpeg' }));
+  };
+
+  const onTakePhoto = () => {
+    if (isPhoneLike()) {
+      cameraInputRef.current?.click();
+      return;
+    }
+    startWebcam();
+  };
+
   useEffect(() => {
     fetchLots();
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
     };
     // business.id is the only identity we care about; preview cleanup runs on unmount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [business?.id]);
+
+  useEffect(() => {
+    if (!webcamOpen || !videoRef.current || !streamRef.current) return;
+    videoRef.current.srcObject = streamRef.current;
+    const onReady = () => setWebcamReady(true);
+    videoRef.current.addEventListener('loadedmetadata', onReady);
+    videoRef.current.play().catch(() => {});
+    return () => videoRef.current?.removeEventListener('loadedmetadata', onReady);
+  }, [webcamOpen]);
 
   const resetReview = () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -57,6 +176,17 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
     setFileName('');
     setReview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (cameraInputRef.current) cameraInputRef.current.value = '';
+  };
+
+  const openReview = ({ supplier = '', date = '', rows, rejected = [], mock = false }) => {
+    setReview({
+      supplier,
+      date: date ? String(date).slice(0, 10) : '',
+      rows: rows?.length ? rows : [emptyRow()],
+      rejected,
+      mock
+    });
   };
 
   const handleFile = async (file) => {
@@ -69,32 +199,36 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
       return;
     }
 
+    const prepared = await prepareReceiptFile(file);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
-    setFileName(file.name);
+    const canPreview = prepared.type.startsWith('image/');
+    setPreviewUrl(canPreview ? URL.createObjectURL(prepared) : null);
+    setFileName(prepared.name || file.name || 'receipt.jpg');
 
     setParsing(true);
     try {
       const formData = new FormData();
-      formData.append('receipt', file);
+      formData.append('receipt', prepared, prepared.name || 'receipt.jpg');
       formData.append('businessId', business.id);
 
       const response = await fetch(`${API_BASE}/stock/receipt/parse`, {
         method: 'POST',
         body: formData
       });
-      const data = await response.json();
+      const data = await readJsonSafe(response);
 
       if (!response.ok) {
-        onError(data.error || 'Could not read this receipt');
-        setReview(null);
+        // Keep the photo on screen so the owner can still type the lines
+        // and tap Save — a failed read must not block submit.
+        onError(data.error || 'Could not read this receipt. Type the lines from the photo and save.');
+        openReview({ rows: [emptyRow()] });
         return;
       }
 
-      setReview({
+      openReview({
         supplier: data.supplier || '',
-        date: data.date ? String(data.date).slice(0, 10) : '',
-        rows: data.line_items.map((row) => ({
+        date: data.date || '',
+        rows: (data.line_items || []).map((row) => ({
           item: row.item,
           qty: String(row.qty),
           unit_cost: String(row.unit_cost),
@@ -104,7 +238,8 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
         mock: Boolean(data.mock)
       });
     } catch {
-      onError('Connection to the receipt reader failed');
+      onError('Connection to the receipt reader failed. Type the lines from the photo and save.');
+      openReview({ rows: [emptyRow()] });
     } finally {
       setParsing(false);
     }
@@ -234,23 +369,59 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
           </p>
         )}
 
-        <label className={`stock-dropzone ${parsing ? 'is-busy' : ''}`}>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*,application/pdf"
-            disabled={parsing || saving || !online}
-            onChange={(event) => handleFile(event.target.files?.[0])}
-          />
+        <div className={`stock-dropzone ${parsing ? 'is-busy' : ''}`}>
           <span className="stock-dropzone-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
               <circle cx="12" cy="13" r="4" />
             </svg>
           </span>
-          <strong>{parsing ? 'Reading receipt…' : 'Tap to take a photo or choose a file'}</strong>
-          <span>JPG, PNG, WebP or PDF · max 8 MB</span>
-        </label>
+          <strong>{parsing ? 'Reading receipt…' : 'Photograph the supplier slip'}</strong>
+          <span>
+            On a laptop this uses the webcam (allow camera when asked). On a phone it opens the rear camera. Or pick a photo you already took.
+          </span>
+          <div className="stock-upload-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={parsing || saving || !online}
+              onClick={onTakePhoto}
+            >
+              Take photo
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={parsing || saving || !online}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Choose file
+            </button>
+          </div>
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+            disabled={parsing || saving || !online}
+            onChange={(event) => {
+              handleFile(event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,application/pdf"
+            hidden
+            disabled={parsing || saving || !online}
+            onChange={(event) => {
+              handleFile(event.target.files?.[0]);
+              event.target.value = '';
+            }}
+          />
+        </div>
 
         {previewUrl && (
           <img className="stock-preview" src={previewUrl} alt="Uploaded receipt preview" />
@@ -259,6 +430,24 @@ export default function StockPanel({ business, online, onSaved, onError, onSucce
           <p className="stock-filename">Selected: {fileName}</p>
         )}
       </div>
+
+      {webcamOpen && (
+        <div className="modal-overlay">
+          <div className="modal-card webcam-card">
+            <h3>Hold the receipt up to the webcam</h3>
+            <p>Allow camera access if the browser asks. Then snap when the slip is readable.</p>
+            <video ref={videoRef} className="webcam-preview" autoPlay playsInline muted />
+            <div className="modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={stopWebcam}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={snapWebcam} disabled={!webcamReady}>
+                {webcamReady ? 'Snap receipt' : 'Starting camera…'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {review && (
         <form className="logger-card stock-review" onSubmit={handleConfirm}>
