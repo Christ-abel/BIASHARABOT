@@ -5,7 +5,19 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import Entry from './models/Entry.js';
 import Business from './models/Business.js';
-import { parseTextWithGemini, parseAudioWithGemini } from './gemini.js';
+import Stock from './models/Stock.js';
+import { parseTextWithGemini, parseAudioWithGemini, parseReceiptWithGemini, translatePhrasesWithGemini } from './gemini.js';
+import { sanitizeReceiptParse, validateStockItem, validateStockBatch } from './stock-validation.js';
+import { persistStockLots } from './stock.js';
+import { buildWeeklyReport } from './profit.js';
+import { assembleLocalizedReport, normalizeReportLanguage } from './report.js';
+import { REPORT_LANGUAGES, isSupportedReportLanguage } from './languages.js';
+import { COMPLIANCE_LABELS } from './report-labels.js';
+import { toPublicBusiness } from './business-public.js';
+import { KENYA_COUNTIES } from './compliance-config.js';
+import { evaluateCompliance } from './compliance-rules.js';
+import { dispatchComplianceNotices, phraseCompliance } from './compliance-notices.js';
+import ComplianceNotice from './models/ComplianceNotice.js';
 import { triggerSTKPush } from './payments.js';
 import { sendSMS } from './sms.js';
 import {
@@ -25,8 +37,34 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// Memory storage for audio uploads (prevents disk clutter)
+// Memory storage for audio and receipt uploads (prevents disk clutter)
 const upload = multer({ storage: multer.memoryStorage() });
+
+const RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
+const RECEIPT_TYPES = /^(image\/(jpeg|jpg|png|webp|heic|heif)|application\/pdf)$/i;
+
+const receiptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: RECEIPT_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (RECEIPT_TYPES.test(file.mimetype)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('Receipt must be a photo (JPG, PNG, WebP) or a PDF scan'));
+  }
+});
+
+/** Turn multer's file-filter / size errors into a 400 the dashboard can show. */
+function acceptReceiptFile(req, res, next) {
+  receiptUpload.single('receipt')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'Receipt file is too large (max 8 MB)' });
+    }
+    return res.status(400).json({ error: err.message || 'Could not read the uploaded file' });
+  });
+}
 
 // MongoDB Connection
 const mongoURI = process.env.MONGODB_URI;
@@ -294,85 +332,42 @@ app.post('/api/webhooks/tiara-mo', (req, res) => {
 });
 
 // 6. Weekly Report Endpoint & SMS Trigger
-function buildReportMessage({ title, businessName, revenue, cost_of_goods, other_expenses, mpesa_fees, net_profit, outstanding_credit }) {
-  return `${title}\n` +
-    `Shop: ${businessName}\n` +
-    `---------------------\n` +
-    `Revenue: KSh ${revenue.toFixed(2)}\n` +
-    `Cost of Goods: KSh ${cost_of_goods.toFixed(2)}\n` +
-    `Other Expenses: KSh ${other_expenses.toFixed(2)}\n` +
-    `M-Pesa Fees: KSh ${mpesa_fees.toFixed(2)}\n` +
-    `---------------------\n` +
-    `Net Profit: KSh ${net_profit.toFixed(2)}\n` +
-    `Outstanding Credit: KSh ${outstanding_credit.toFixed(2)}\n` +
-    `---------------------\n` +
-    `Powered by BiasharaGPT!`;
-}
-
 app.get('/api/reports/weekly', async (req, res) => {
   try {
     const { businessId, phone, businessName } = req.query;
     const bid = businessId || 'demo-shop';
-    const bname = businessName || 'My Duka';
+    const biz = await Business.findOne({ id: bid });
+    const bname = biz?.name || businessName || 'My Duka';
+    const language = normalizeReportLanguage(req.query.language || biz?.reportLanguage);
 
-    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid})`);
+    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid}) lang=${language}`);
 
-    const entries = await Entry.find({ business_id: bid });
+    const [entries, stockLots] = await Promise.all([
+      Entry.find({ business_id: bid }),
+      Stock.find({ business_id: bid })
+    ]);
 
-    // Fix: coerce every total to a number with a 0 fallback. A single
-    // entry with a missing/undefined total previously turned these sums
-    // into NaN, which JSON.stringify silently converts to null — that
-    // null then crashed the frontend's .toFixed() calls.
-    const revenue = entries
-      .filter(e => e.type === 'sale')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const cost_of_goods = entries
-      .filter(e => e.type === 'purchase')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const other_expenses = entries
-      .filter(e => e.type === 'expense' && e.source !== 'payhero')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const mpesa_fees = entries
-      .filter(e => e.type === 'expense' && e.source === 'payhero')
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const outstanding_credit = entries
-      .filter(e => e.type === 'credit' && !e.matched)
-      .reduce((sum, e) => sum + (Number(e.total) || 0), 0);
-
-    const net_profit = revenue - cost_of_goods - other_expenses - mpesa_fees;
-
-    const report = {
-      revenue,
-      cost_of_goods,
-      other_expenses,
-      mpesa_fees,
-      net_profit,
-      outstanding_credit
-    };
+    // Cash-basis totals keep the same formula as before. Item-level gross
+    // profit is computed from stock unit costs and sits beside them.
+    const report = buildWeeklyReport(entries, stockLots);
+    const localized = await assembleLocalizedReport({
+      report,
+      businessName: bname,
+      language,
+      translate: translatePhrasesWithGemini
+    });
 
     let smsStatus = null;
     if (phone) {
-      const smsMessage = buildReportMessage({
-        title: 'BiasharaGPT Weekly Report',
-        businessName: bname,
-        revenue,
-        cost_of_goods,
-        other_expenses,
-        mpesa_fees,
-        net_profit,
-        outstanding_credit
-      });
-
-      smsStatus = await sendSMS({ to: phone, message: smsMessage });
+      smsStatus = await sendSMS({ to: phone, message: localized.sms });
     }
 
     res.json({
       success: true,
-      report,
+      report: localized.report,
+      labels: localized.labels,
+      language: localized.language,
+      languageFallback: localized.languageFallback,
       smsStatus
     });
   } catch (error) {
@@ -395,11 +390,22 @@ app.post('/api/reports/daily/schedule-test', async (req, res) => {
       outstanding_credit: 800
     };
 
-    const message = buildReportMessage({
-      title: 'BiasharaGPT Daily Report',
+    const localized = await assembleLocalizedReport({
+      report: {
+        ...mockReport,
+        gross_profit: 5200,
+        gross_margin: 42,
+        items_missing_cost: 0,
+        item_profits: [
+          { item: 'Loaves', gross_profit: 3200, margin: 48, cost_unknown: false },
+          { item: 'Sugar', gross_profit: 2000, margin: 35, cost_unknown: false }
+        ]
+      },
       businessName,
-      ...mockReport
+      language: 'en',
+      title: 'BiasharaGPT Daily Report'
     });
+    const message = localized.sms;
 
     const jobId = `daily_report_${Date.now()}`;
     const delayMs = 60_000;
@@ -456,13 +462,17 @@ app.post('/api/admin/verify', async (req, res) => {
 // 8. Sign Up Business Endpoint
 app.post('/api/business', async (req, res) => {
   try {
-    const { name, phone, email, password, confirmPassword, tillNumber } = req.body;
+    const { name, phone, email, password, confirmPassword, tillNumber, reportLanguage } = req.body;
     if (!name || !phone || !email || !password || !confirmPassword) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
     if (password !== confirmPassword) {
       return res.status(400).json({ error: "Passwords do not match" });
+    }
+
+    if (reportLanguage && !isSupportedReportLanguage(reportLanguage)) {
+      return res.status(400).json({ error: 'Unsupported report language', allowed: REPORT_LANGUAGES });
     }
 
     let id = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
@@ -479,21 +489,14 @@ app.post('/api/business', async (req, res) => {
       phone,
       email,
       password: hashedPassword,
-      tillNumber: tillNumber || process.env.PAYHERO_CHANNEL_ID || '6669'
+      tillNumber: tillNumber || process.env.PAYHERO_CHANNEL_ID || '6669',
+      reportLanguage: normalizeReportLanguage(reportLanguage)
     });
 
     await business.save();
     console.log(`[BUSINESS REGISTERED] ID: ${id}, Name: ${name}, Email: ${email}`);
 
-    const responseBiz = {
-      id: business.id,
-      name: business.name,
-      phone: business.phone,
-      email: business.email,
-      tillNumber: business.tillNumber
-    };
-
-    res.status(201).json(responseBiz);
+    res.status(201).json(toPublicBusiness(business));
   } catch (error) {
     console.error("Business signup error:", error);
     res.status(500).json({ error: "Failed to register business profile" });
@@ -507,10 +510,226 @@ app.get('/api/business/:id', async (req, res) => {
     if (!business) {
       return res.status(404).json({ error: "Business not found" });
     }
-    res.json(business);
+    res.json(toPublicBusiness(business));
   } catch (error) {
     console.error("Fetch business details error:", error);
     res.status(500).json({ error: "Failed to retrieve business profile" });
+  }
+});
+
+// 9b. Update language and compliance profile. Old records without
+// reportLanguage stay English via normalizeReportLanguage — no migration.
+app.patch('/api/business/:id', async (req, res) => {
+  try {
+    const business = await Business.findOne({ id: req.params.id });
+    if (!business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+
+    const { reportLanguage, businessType, county, kraPin, estimatedAnnualTurnover } = req.body || {};
+
+    if (reportLanguage !== undefined) {
+      if (!isSupportedReportLanguage(reportLanguage)) {
+        return res.status(400).json({ error: 'Unsupported report language', allowed: REPORT_LANGUAGES });
+      }
+      business.reportLanguage = reportLanguage;
+    }
+
+    if (businessType !== undefined) {
+      if (!['sole_proprietor', 'partnership', 'company'].includes(businessType)) {
+        return res.status(400).json({ error: 'Unsupported business type' });
+      }
+      business.businessType = businessType;
+    }
+
+    if (county !== undefined) {
+      business.county = String(county).trim();
+    }
+
+    if (kraPin !== undefined) {
+      if (!['unknown', 'yes', 'no'].includes(kraPin)) {
+        return res.status(400).json({ error: 'kraPin must be unknown, yes or no' });
+      }
+      business.kraPin = kraPin;
+    }
+
+    if (estimatedAnnualTurnover !== undefined) {
+      const amount = Number(estimatedAnnualTurnover);
+      if (!Number.isFinite(amount) || amount < 0) {
+        return res.status(400).json({ error: 'Estimated turnover must be a number of 0 or more' });
+      }
+      business.estimatedAnnualTurnover = amount;
+    }
+
+    await business.save();
+    res.json(toPublicBusiness(business));
+  } catch (error) {
+    console.error('Business update error:', error);
+    res.status(500).json({ error: 'Failed to update business profile', details: error.message });
+  }
+});
+
+app.get('/api/languages', (_req, res) => {
+  res.json({ languages: REPORT_LANGUAGES, default: 'en' });
+});
+
+// 9c. Personalised compliance checklist + optional one-shot SMS notices.
+app.get('/api/compliance', async (req, res) => {
+  try {
+    const bid = req.query.businessId || 'demo-shop';
+    const business = await Business.findOne({ id: bid });
+    if (!business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+
+    const language = normalizeReportLanguage(req.query.language || business.reportLanguage);
+    const labels = COMPLIANCE_LABELS[language] || COMPLIANCE_LABELS.en;
+    const entries = await Entry.find({ business_id: bid });
+    const evaluation = evaluateCompliance({ profile: toPublicBusiness(business), entries });
+
+    const obligations = evaluation.obligations.map((row) => ({
+      id: row.id,
+      applies: row.applies,
+      status: row.status,
+      deadline: row.deadline,
+      title: phraseCompliance(labels, row.titleKey, row.vars),
+      explanation: phraseCompliance(labels, row.bodyKey, row.vars)
+    }));
+
+    const triggers = evaluation.triggers.map((row) => ({
+      id: row.id,
+      message: phraseCompliance(labels, row.titleKey, row.vars)
+    }));
+
+    let notices = { sent: [], skipped: [] };
+    if (req.query.notify === '1') {
+      notices = await dispatchComplianceNotices({
+        business: toPublicBusiness(business),
+        evaluation,
+        language
+      });
+    }
+
+    const recent = await ComplianceNotice.find({ business_id: bid }).sort({ sent_at: -1 }).limit(20);
+
+    res.json({
+      language,
+      labels,
+      profileIncomplete: evaluation.profileIncomplete,
+      turnover: evaluation.turnover,
+      obligations,
+      triggers,
+      notices,
+      sentHistory: recent,
+      counties: KENYA_COUNTIES,
+      profile: toPublicBusiness(business)
+    });
+  } catch (error) {
+    console.error('Compliance endpoint error:', error);
+    res.status(500).json({ error: 'Failed to load compliance information', details: error.message });
+  }
+});
+
+// 10. Parse a receipt photo / PDF — extract only, never write.
+// Phone photos are often blurry, so the owner reviews the lines before save.
+app.post('/api/stock/receipt/parse', acceptReceiptFile, async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'A receipt photo or PDF is required' });
+    }
+
+    const mimeType = req.file.mimetype || 'image/jpeg';
+    console.log(`[RECEIPT UPLOADED] ${req.file.size} bytes, ${mimeType}`);
+
+    const parsed = await parseReceiptWithGemini(req.file.buffer, mimeType);
+    console.log('[RECEIPT PARSED]', parsed);
+
+    const sanitized = sanitizeReceiptParse(parsed);
+    if (!sanitized.ok) {
+      return res.status(422).json({
+        error: sanitized.error,
+        rejected: sanitized.rejected || []
+      });
+    }
+
+    res.json({
+      supplier: sanitized.supplier,
+      date: sanitized.date,
+      line_items: sanitized.items,
+      rejected: sanitized.rejected,
+      mock: !process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'mock'
+    });
+  } catch (error) {
+    console.error('Receipt parse endpoint error:', error);
+    res.status(500).json({ error: 'Failed to read this receipt', details: error.message });
+  }
+});
+
+// 11. Save reviewed receipt lines (or a typed batch) as stock + purchase entries.
+app.post('/api/stock/confirm', async (req, res) => {
+  try {
+    const { businessId, items, supplier, date, source } = req.body || {};
+    const origin = source === 'manual' ? 'manual' : 'receipt';
+
+    const batch = validateStockBatch(items);
+    if (!batch.ok) {
+      return res.status(422).json({ error: batch.error });
+    }
+
+    const result = await persistStockLots({
+      businessId,
+      items: batch.items,
+      source: origin,
+      supplier: typeof supplier === 'string' ? supplier.trim() : '',
+      purchaseDate: date || null
+    });
+
+    console.log(`[STOCK SAVED] ${result.count} lot(s) from ${origin} for ${businessId || 'demo-shop'}`);
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('Stock confirm endpoint error:', error);
+    res.status(500).json({ error: 'Failed to save stock', details: error.message });
+  }
+});
+
+// 12. Type one stock purchase in when there is no receipt.
+app.post('/api/stock/manual', async (req, res) => {
+  try {
+    const { businessId, item, qty, unit_cost, total, supplier, date } = req.body || {};
+
+    const checked = validateStockItem({ item, qty, unit_cost, total });
+    if (!checked.ok) {
+      return res.status(422).json({ error: checked.error });
+    }
+
+    const result = await persistStockLots({
+      businessId,
+      items: [checked.item],
+      source: 'manual',
+      supplier: typeof supplier === 'string' ? supplier.trim() : '',
+      purchaseDate: date || null
+    });
+
+    console.log(`[STOCK MANUAL] ${checked.item.item} x${checked.item.qty} for ${businessId || 'demo-shop'}`);
+    res.status(201).json({
+      stock: result.lots[0],
+      count: 1
+    });
+  } catch (error) {
+    console.error('Manual stock endpoint error:', error);
+    res.status(500).json({ error: 'Failed to save stock entry', details: error.message });
+  }
+});
+
+// 13. Recent stock purchases for the dashboard list.
+app.get('/api/stock', async (req, res) => {
+  try {
+    const bid = req.query.businessId || 'demo-shop';
+    const lots = await Stock.find({ business_id: bid }).sort({ created_at: -1 }).limit(100);
+    res.json(lots);
+  } catch (error) {
+    console.error('Get stock error:', error);
+    res.status(500).json({ error: 'Failed to fetch stock' });
   }
 });
 
