@@ -104,60 +104,80 @@ export async function resolveReportLabels(language, options = {}) {
   };
 }
 
-export function formatItemProfitLines(report, labels, limit = 4) {
+// SMS line budgets. A till slip is billed per 153-character part, so the SMS
+// lists the biggest items and points to the app for the rest.
+export const SMS_SOLD_ITEM_LIMIT = 5;
+export const SMS_PROFIT_ITEM_LIMIT = 3;
+
+function moreItemsLine(labels, hidden) {
+  if (hidden <= 0) return null;
+  const template = labels?.moreItems || REPORT_LABELS.en.moreItems;
+  return ` ${String(template).replace('{count}', String(hidden))}`;
+}
+
+/**
+ * Amounts in the SMS: whole shillings when there are no cents
+ * ("KSh 1300"), two decimals otherwise ("KSh 12500.50"). Nothing is
+ * rounded away, and the format never depends on the report language.
+ */
+export function formatSmsAmount(value) {
+  const amount = Number(value);
+  const safe = Number.isFinite(amount) ? Math.round(amount * 100) / 100 : 0;
+  return `KSh ${Number.isInteger(safe) ? safe.toFixed(0) : safe.toFixed(2)}`;
+}
+
+const SMS_RULE = '----------';
+
+export function formatItemProfitLines(report, labels, limit = SMS_PROFIT_ITEM_LIMIT) {
   if (!report || typeof report.gross_profit !== 'number') return '';
 
   const marginBit = Number.isFinite(report.gross_margin)
     ? ` (${report.gross_margin.toFixed(0)}%)`
     : '';
 
-  const lines = [`${labels.grossProfit}: ${formatKesAmount(report.gross_profit)}${marginBit}`];
+  const lines = [`${labels.grossProfit}: ${formatSmsAmount(report.gross_profit)}${marginBit}`];
 
-  const rows = report.item_profits || [];
-  for (const row of rows.slice(0, limit)) {
-    const soldBit = Number.isFinite(Number(row.unit_price))
-      ? `${labels.soldAt || 'sold at'} ${formatKesAmount(row.unit_price)}`
-      : Number.isFinite(Number(row.revenue))
-        ? `${labels.rev || 'rev'} ${formatKesAmount(row.revenue)}`
-        : '';
-    if (row.cost_unknown) {
-      lines.push(`  ${row.item}${soldBit ? `: ${soldBit}` : ''}`);
-      continue;
-    }
+  // Items with no stock cost have no profit to show; they are already listed
+  // under products sold and counted in the "no stock cost yet" line below.
+  const priced = (report.item_profits || []).filter((row) => !row.cost_unknown);
+  for (const row of priced.slice(0, limit)) {
     const rowMargin = Number.isFinite(row.margin) ? ` (${row.margin.toFixed(0)}%)` : '';
-    const prefix = soldBit ? `${soldBit} · ` : '';
-    lines.push(`  ${row.item}: ${prefix}${formatKesAmount(row.gross_profit)}${rowMargin}`);
+    lines.push(` ${row.item}: ${formatSmsAmount(row.gross_profit)}${rowMargin}`);
   }
+  const more = moreItemsLine(labels, priced.length - limit);
+  if (more) lines.push(more);
 
   if (report.items_missing_cost > 0) {
-    lines.push(`  ${String(labels.itemsMissingCost).replace('{count}', String(report.items_missing_cost))}`);
+    lines.push(` ${String(labels.itemsMissingCost).replace('{count}', String(report.items_missing_cost))}`);
   }
 
   return lines.join('\n');
 }
 
-export function formatSoldItemLines(report, labels, limit = 8) {
+export function formatSoldItemLines(report, labels, limit = SMS_SOLD_ITEM_LIMIT) {
   const rows = Array.isArray(report?.sold_items) ? report.sold_items : [];
   if (!rows.length) return '';
   const copy = labels || REPORT_LABELS.en;
   const lines = [copy.productsSold];
   for (const row of rows.slice(0, limit)) {
-    lines.push(
-      `  ${row.item}  ${row.qty} x ${formatKesAmount(row.unit_price)} = ${formatKesAmount(row.total)}`
-    );
+    lines.push(` ${row.item} ${row.qty} x ${formatSmsAmount(row.unit_price)} = ${formatSmsAmount(row.total)}`);
   }
+  const more = moreItemsLine(copy, rows.length - limit);
+  if (more) lines.push(more);
   return lines.join('\n');
 }
 
 /**
- * SMS / plain-text till slip. Amounts are always `KSh 0.00` so a language
- * change cannot move a decimal or rename the currency.
+ * SMS / plain-text till slip. Amounts go through formatSmsAmount so a
+ * language change cannot move a decimal or rename the currency. Kept short
+ * on purpose: every 153 characters is another billed SMS part.
  */
 export function buildReportMessage({
   labels,
   title,
   businessName,
   shopPhone,
+  includePhone = false,
   tillNumber,
   periodLabel,
   soldLines,
@@ -176,23 +196,26 @@ export function buildReportMessage({
     `${copy.shop}: ${businessName}`
   ];
   if (tillNumber) header.push(`${copy.till}: ${tillNumber}`);
-  if (shopPhone) header.push(`${copy.phone}: ${shopPhone}`);
+  // The SMS is delivered to the shop's own phone, so repeating that number
+  // only costs characters. Plain-text callers can still pass it.
+  if (shopPhone && includePhone) header.push(`${copy.phone}: ${shopPhone}`);
   if (periodLabel) header.push(`${copy.period}: ${periodLabel}`);
   const soldBlock = soldLines ? `${soldLines}\n` : '';
   const profitBlock = itemProfitLines ? `${itemProfitLines}\n` : '';
   return `${header.join('\n')}\n` +
-    `---------------------\n` +
+    `${SMS_RULE}\n` +
     soldBlock +
-    `${copy.revenue}: ${formatKesAmount(revenue)}\n` +
-    `${copy.costOfGoods}: ${formatKesAmount(cost_of_goods)}\n` +
-    `${copy.otherExpenses}: ${formatKesAmount(other_expenses)}\n` +
-    `${copy.mpesaFees}: ${formatKesAmount(mpesa_fees)}\n` +
-    `---------------------\n` +
-    `${copy.netProfit}: ${formatKesAmount(net_profit)}\n` +
-    (Number(stock_on_shelf) > 0 ? `${copy.shelfStock}: ${formatKesAmount(stock_on_shelf)}\n` : '') +
+    `${copy.revenue}: ${formatSmsAmount(revenue)}\n` +
+    `${copy.costOfGoods}: ${formatSmsAmount(cost_of_goods)}\n` +
+    `${copy.otherExpenses}: ${formatSmsAmount(other_expenses)}\n` +
+    `${copy.mpesaFees}: ${formatSmsAmount(mpesa_fees)}\n` +
+    `${SMS_RULE}\n` +
+    `${copy.netProfit}: ${formatSmsAmount(net_profit)}\n` +
+    (Number(stock_on_shelf) > 0 ? `${copy.shelfStock}: ${formatSmsAmount(stock_on_shelf)}
+` : '') +
     profitBlock +
-    `${copy.outstandingCredit}: ${formatKesAmount(outstanding_credit)}\n` +
-    `---------------------\n` +
+    `${copy.outstandingCredit}: ${formatSmsAmount(outstanding_credit)}\n` +
+    `${SMS_RULE}\n` +
     `${copy.poweredBy}`;
 }
 

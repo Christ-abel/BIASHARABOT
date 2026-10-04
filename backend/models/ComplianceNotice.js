@@ -16,6 +16,11 @@ const complianceNoticeSchema = new mongoose.Schema({
   window_key: { type: String, required: true },
   language: { type: String, default: 'en' },
   message: { type: String, default: '' },
+  // 'sending' while the SMS is in flight. Rows written before this field
+  // existed have no status and were sent.
+  status: { type: String, enum: ['sending', 'sent'], default: 'sent' },
+  ref_id: { type: String },
+  mock: { type: Boolean, default: false },
   sent_at: { type: Date, default: Date.now }
 });
 

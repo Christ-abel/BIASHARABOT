@@ -49,7 +49,8 @@ export default function SettingsPanel({ business, online, onBusinessChange, onEr
         language: business.reportLanguage || 'en'
       });
       if (notify) query.set('notify', '1');
-      const response = await fetch(`${API_BASE}/compliance?${query}`);
+      // The server only sends compliance SMS for the logged-in owner.
+      const response = await fetch(`${API_BASE}/compliance?${query}`, { headers: authHeaders() });
       if (!response.ok) throw new Error('Could not load compliance');
       setCompliance(await response.json());
     } catch (err) {

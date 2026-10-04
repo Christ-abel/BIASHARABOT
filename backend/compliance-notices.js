@@ -29,10 +29,11 @@ export function phraseCompliance(labels, key, vars = {}) {
 
 export function buildNoticeMessage({ labels, shopName, obligation, trigger }) {
   if (trigger) {
-    return interpolate(labels.newObligationSms, {
+    // The threshold sentence is already a full statement ("Your turnover has
+    // entered…"), so it is not squeezed into the "{title} now applies" form.
+    return interpolate(labels.thresholdSms, {
       title: phraseCompliance(labels, trigger.titleKey, trigger.vars),
-      shop: shopName,
-      hint: phraseCompliance(labels, trigger.titleKey, trigger.vars)
+      shop: shopName
     });
   }
 
@@ -69,53 +70,46 @@ function collectOutbound(evaluation) {
 }
 
 /**
- * Send at most one SMS per obligation per window. The unique index is the
- * last line of defence if two requests race.
+ * Send at most one SMS per obligation per window.
+ *
+ * The notice row is inserted *before* the SMS goes out, so the unique index
+ * decides which of two racing requests sends — the loser gets a duplicate-key
+ * error and skips. If the SMS then fails, the row is removed again so the
+ * next visit retries instead of the owner silently never being told.
  */
 export async function dispatchComplianceNotices({
   business,
   evaluation,
   language,
-  send = sendSMS
+  send = sendSMS,
+  store = ComplianceNotice
 }) {
   const lang = normalizeReportLanguage(language || business.reportLanguage);
   const labels = COMPLIANCE_LABELS[lang] || COMPLIANCE_LABELS.en;
   const shopName = business.name || 'Duka';
   const sent = [];
   const skipped = [];
+  const failed = [];
 
   for (const item of collectOutbound(evaluation)) {
-    const existing = await ComplianceNotice.findOne({
-      business_id: business.id,
-      obligation_id: item.obligation_id,
-      notice_type: item.notice_type,
-      window_key: item.window_key
-    });
-
-    if (existing) {
-      skipped.push({ ...item, reason: 'already_sent' });
-      continue;
-    }
-
     const message = buildNoticeMessage({
       labels,
       shopName,
       obligation: item.obligation,
       trigger: item.trigger
-    }).slice(0, 480);
+    });
 
-    const sms = await send({ to: business.phone, message });
-
+    let record;
     try {
-      const record = await ComplianceNotice.create({
+      record = await store.create({
         business_id: business.id,
         obligation_id: item.obligation_id,
         notice_type: item.notice_type,
         window_key: item.window_key,
         language: lang,
-        message
+        message,
+        status: 'sending'
       });
-      sent.push({ ...item, message, sms, id: record._id });
     } catch (error) {
       if (error.code === 11000) {
         skipped.push({ ...item, reason: 'already_sent' });
@@ -123,9 +117,22 @@ export async function dispatchComplianceNotices({
       }
       throw error;
     }
+
+    const sms = await send({ to: business.phone, message });
+
+    if (sms?.success) {
+      await store.updateOne(
+        { _id: record._id },
+        { $set: { status: 'sent', ref_id: sms.msgId, mock: Boolean(sms.mock), sent_at: new Date() } }
+      );
+      sent.push({ ...item, message, sms, id: record._id });
+    } else {
+      await store.deleteOne({ _id: record._id });
+      failed.push({ ...item, reason: sms?.code || 'sms_failed', error: sms?.error });
+    }
   }
 
-  return { sent, skipped, language: lang };
+  return { sent, skipped, failed, language: lang };
 }
 
 /**
