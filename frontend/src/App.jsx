@@ -154,6 +154,7 @@ export default function App() {
   const [reportLanguageFallback, setReportLanguageFallback] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [smsStatus, setSmsStatus] = useState(null);
+  const [smsSending, setSmsSending] = useState(false);
   const [ledgerDate, setLedgerDate] = useState(todayKenya);
   const [reportDate, setReportDate] = useState('');
   const [reportPeriod, setReportPeriod] = useState(null);
@@ -200,8 +201,9 @@ export default function App() {
     }
   };
 
-  // Fetch weekly report + trigger SMS automatically on load
-  const fetchReportAndSendSMS = async ({ date = reportDate, sendSms } = {}) => {
+  // Load the till slip. Viewing never sends an SMS: that is the explicit
+  // "Send to my phone" button, or the scheduled weekly run on the server.
+  const fetchReport = async ({ date = reportDate } = {}) => {
     if (!business) return;
     const cacheKey = `report:${business.id}`;
     setReportLoading(true);
@@ -212,7 +214,6 @@ export default function App() {
         businessName: business.name
       });
       if (date) params.set('date', date);
-      if (sendSms || (!date && sendSms !== false)) params.set('phone', business.phone);
       const response = await fetch(`${API_BASE}/reports/weekly?${params.toString()}`);
       if (!response.ok) throw new Error(`Report request failed (${response.status})`);
 
@@ -224,11 +225,8 @@ export default function App() {
       setReportShop(data.shop || { name: business.name, phone: business.phone, tillNumber: business.tillNumber });
 
       if (servedFromCache(response)) {
-        // A replayed response means no SMS went out just now — saying it did
-        // would be a lie the owner might act on.
         const snapshot = await readSnapshot(cacheKey);
         setReportSavedAt(snapshot?.savedAt || response.headers.get('date') || null);
-        setSmsStatus(null);
         return;
       }
 
@@ -236,14 +234,6 @@ export default function App() {
       // Keep the labels with the figures so an offline till slip stays in the
       // owner's language instead of dropping back to English.
       saveSnapshot(cacheKey, { figures: data.report, labels: data.labels || null, language: data.language || 'en' });
-      if (data.smsStatus && data.smsStatus.success) {
-        setSmsStatus({ success: true, message: `Weekly report SMS sent automatically to ${business.phone}!` });
-      } else if (data.smsStatus) {
-        setSmsStatus({ success: false, error: 'SMS notification scheduled but service is offline' });
-      } else {
-        // Date browse does not send SMS — do not pretend the service failed.
-        setSmsStatus(null);
-      }
     } catch (err) {
       console.warn('Serving weekly report from offline snapshot:', err);
       const snapshot = await readSnapshot(cacheKey);
@@ -254,12 +244,44 @@ export default function App() {
         setReportLabels(saved.labels || null);
         setReportLanguageFallback(false);
         setReportSavedAt(snapshot.savedAt);
-        setSmsStatus(null);
       } else {
         setError('No saved till slip on this phone yet — connect once to generate it.');
       }
     } finally {
       setReportLoading(false);
+    }
+  };
+
+  // Owner asked for the till slip on their phone. The server sends it to the
+  // number saved on the shop and reports exactly what happened.
+  const sendReportSms = async () => {
+    if (!business || smsSending) return;
+    if (isOffline()) {
+      setSmsStatus({ success: false, error: 'Sending an SMS needs network.' });
+      return;
+    }
+    setSmsSending(true);
+    setSmsStatus(null);
+    try {
+      const response = await fetch(`${API_BASE}/business/${business.id}/report-sms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(reportDate ? { date: reportDate } : {})
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success) {
+        setSmsStatus(data.mock
+          ? { success: true, message: 'SMS test mode: nothing was sent. The message was written to the server log.' }
+          : { success: true, message: `Till slip sent by SMS to ${business.phone}.` });
+      } else if (response.status === 401) {
+        setSmsStatus({ success: false, error: 'Please log in again to send the till slip by SMS.' });
+      } else {
+        setSmsStatus({ success: false, error: data.error || 'The SMS could not be sent.' });
+      }
+    } catch {
+      setSmsStatus({ success: false, error: 'Could not reach the server to send the SMS.' });
+    } finally {
+      setSmsSending(false);
     }
   };
 
@@ -309,7 +331,7 @@ export default function App() {
     setError(null);
     setSuccess(null);
     if (activeTab === 'report' && business) {
-      fetchReportAndSendSMS({ date: reportDate, sendSms: !reportDate });
+      fetchReport({ date: reportDate });
     } else {
       fetchEntries();
     }
@@ -1257,7 +1279,7 @@ export default function App() {
         )}
 
         {activeTab === 'report' && (
-          /* Weekly receipt till slip view (SMS sent automatically on render) */
+          /* Weekly receipt till slip view. SMS only via the send button or the weekly job. */
           <div className="receipt-wrapper">
             <DateFilter
               id="report-date"
@@ -1276,13 +1298,27 @@ export default function App() {
                 {reportSavedAt && (
                   <div className="offline-snapshot-note">
                     Showing the till slip saved on this phone {timeAgo(reportSavedAt)}. It refreshes
-                    — and the SMS goes out — once you have network.
+                    once you have network.
                   </div>
                 )}
 
+                <div className="report-sms-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={sendReportSms}
+                    disabled={smsSending || !online || Boolean(reportSavedAt)}
+                  >
+                    {smsSending ? 'Sending…' : `Send this till slip to ${business.phone}`}
+                  </button>
+                  {!reportDate && (
+                    <p className="report-sms-hint">The weekly till slip is also sent automatically every Sunday evening.</p>
+                  )}
+                </div>
+
                 {smsStatus && (
-                  <div className={smsStatus.success ? 'success-message' : 'error-message'}>
-                    📢 {smsStatus.message || smsStatus.error}
+                  <div className={smsStatus.success ? 'success-message' : 'error-message'} role="status">
+                    {smsStatus.message || smsStatus.error}
                   </div>
                 )}
 

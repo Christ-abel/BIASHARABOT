@@ -94,6 +94,26 @@ flowchart LR
 
 **Payments and SMS.** PayHero STK + webhooks. Tiara sends the weekly slip and compliance reminders. Mock keys log to the server console instead of charging.
 
+**When an SMS goes out.** Opening the till slip never sends one. The till slip is texted only by the scheduled weekly job (once per shop per week, skipped for shops with no entries) or when the logged-in owner taps *Send this till slip* (3 an hour). It always goes to the phone saved on the shop. `services/sms.js` refuses non-Kenyan-mobile numbers, reads success from Tiara's own status (it answers HTTP 200 even when it rejects a message), folds text into GSM-7 so it is billed at 153 characters per part, caps a message at 6 parts, and times out after 15 s. Each attempt is recorded in `reportdeliveries`; compliance reminders in `compliancenotices`.
+
+### Scheduled SMS
+
+`backend/scheduler.js` runs inside the API with `node-cron`, in Kenya time:
+
+| Job | Env var | Default |
+| --- | --- | --- |
+| Weekly till slip | `REPORT_SMS_CRON` | `0 20 * * 0` (Sunday 20:00) |
+| Credit reminders | `CREDIT_REMINDER_CRON` | `0 */6 * * *` (every 6 hours) |
+
+Set either to `off` to disable it. Re-running the weekly job in the same week is safe; only failed sends are retried (up to 3 attempts).
+
+**Demo (e.g. every 2 minutes):** in `backend/.env` set `REPORT_SMS_CRON=*/2 * * * *`, `SMS_DEMO_SHOP=<your shop id>`, `SMS_DEMO_REPEAT=1`, then restart. Only that shop is texted, even with no sales this week, and it stops after `SMS_DEMO_MAX_SENDS` (default 3) so the demo cannot drain the Tiara balance. Remove the lines afterwards.
+
+The in-process timer only fires while the server is awake. On a free Render service that sleeps when idle, set `REPORT_SMS_CRON=off` and trigger the job from outside instead:
+
+- **Render Cron Job:** root `backend`, command `npm run job:weekly-reports`, schedule `0 17 * * 0` (17:00 UTC = 20:00 EAT), same env vars as the API.
+- **External pinger** (cron-job.org, GitHub Actions…): set `CRON_SECRET` on the API, then `POST /api/jobs/weekly-reports` with header `X-Cron-Secret: <secret>`. It answers `202` immediately and runs in the background.
+
 ### Main API groups
 
 | Path | Role |
@@ -104,7 +124,9 @@ flowchart LR
 | `PATCH /api/business/:id` | Update language/profile (session required) |
 | `POST /api/entries/text` · `/voice` | Log a transaction |
 | `POST /api/stock/parse` · `/confirm` · `/manual` | Receipt + stock |
-| `GET /api/reports/weekly` | Till slip + optional SMS |
+| `GET /api/reports/weekly` | Till slip (read-only, never sends SMS) |
+| `POST /api/business/:id/report-sms` | Text the till slip to the shop's phone (session required) |
+| `POST /api/jobs/weekly-reports` | Scheduled weekly SMS run (`X-Cron-Secret` required) |
 | `POST /api/payments/stk` | M-Pesa prompt |
 | `/api/compliance/*` | Password-gated tax checklist |
 

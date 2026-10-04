@@ -3,26 +3,27 @@ import cors from 'cors';
 import multer from 'multer';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { timingSafeEqual } from 'node:crypto';
 import Entry from './models/Entry.js';
 import Business from './models/Business.js';
 import Stock from './models/Stock.js';
-import { parseTextWithGemini, parseAudioWithGemini, parseReceiptWithGemini, translatePhrasesWithGemini } from './gemini.js';
+import ReportDelivery from './models/ReportDelivery.js';
+import { parseTextWithGemini, parseAudioWithGemini, parseReceiptWithGemini } from './gemini.js';
 import { coerceParsedEntries } from './parse-entry.js';
 import { sanitizeReceiptParse, validateStockItem, validateStockBatch } from './stock-validation.js';
 import { persistStockLots } from './stock.js';
-import { buildWeeklyReport } from './profit.js';
-import { assembleLocalizedReport, normalizeReportLanguage } from './report.js';
-import { filterEntriesByKenyaRange, formatKenyaPeriod, kenyaDateString, kenyaWeekRange } from './kenya-dates.js';
+import { normalizeReportLanguage } from './report.js';
+import { buildShopReport, runWeeklyReportJob, sendShopReportSms } from './report-delivery.js';
 import { REPORT_LANGUAGES, isSupportedReportLanguage } from './languages.js';
-import { COMPLIANCE_LABELS, REPORT_LABELS } from './report-labels.js';
+import { COMPLIANCE_LABELS } from './report-labels.js';
 import { toPublicBusiness } from './business-public.js';
 import { KENYA_COUNTIES } from './compliance-config.js';
 import { evaluateCompliance } from './compliance-rules.js';
 import { dispatchComplianceNotices, phraseCompliance } from './compliance-notices.js';
 import ComplianceNotice from './models/ComplianceNotice.js';
 import { triggerSTKPush } from './payments.js';
-import { sendSMS } from './services/sms.js';
 import { runCreditReminders } from './credit-reminders.js';
+import { startSmsScheduler } from './scheduler.js';
 import { cancelLastLogged, detectCancelCommand } from './cancel-entry.js';
 import {
   findByClientId,
@@ -37,6 +38,7 @@ import {
   normalizeEmail,
   normalizePhone,
   rateLimit,
+  readSession,
   requireOwnBusiness,
   revokeSession,
   validatePassword,
@@ -471,10 +473,24 @@ app.post('/api/webhooks/payhero', async (req, res) => {
 // 5b. Tiara Connect DELIVERY_REPORT Webhook
 // Register in Tiara dashboard as callback type: DELIVERY_REPORT
 // URL: https://biasharabot-0ghr.onrender.com/api/webhooks/tiara-delivery
-app.post('/api/webhooks/tiara-delivery', (req, res) => {
-  console.log("[TIARA DELIVERY_REPORT]", JSON.stringify(req.body, null, 2));
-  // Once you see the real payload shape here, match req.body.refId
-  // against the msgId returned by sendSMS() to track per-message status.
+app.post('/api/webhooks/tiara-delivery', async (req, res) => {
+  const body = req.body || {};
+  console.log("[TIARA DELIVERY_REPORT]", JSON.stringify(body));
+  // The exact payload shape is still to be confirmed against a live report;
+  // accept the likely field names and log anything we cannot match.
+  const refId = body.msgId || body.messageId || body.refId || body.ref_id || body.reference;
+  const status = body.status || body.deliveryStatus || body.dlrStatus;
+  if (refId) {
+    try {
+      const updated = await ReportDelivery.updateOne(
+        { ref_id: String(refId) },
+        { $set: { delivery_status: status ? String(status) : 'reported', delivered_at: new Date() } }
+      );
+      if (!updated.matchedCount) console.log(`[TIARA DELIVERY_REPORT] No report SMS with msgId ${refId}`);
+    } catch (error) {
+      console.error('[TIARA DELIVERY_REPORT] Could not record delivery:', error.message);
+    }
+  }
   res.status(200).json({ received: true });
 });
 
@@ -488,54 +504,28 @@ app.post('/api/webhooks/tiara-mo', (req, res) => {
   res.status(200).json({ received: true });
 });
 
-// 6. Weekly Report Endpoint & SMS Trigger
+// 6. Weekly / daily till slip. Read-only: viewing a report never sends an
+// SMS — see the report-sms and jobs routes below for that.
 app.get('/api/reports/weekly', async (req, res) => {
   try {
-    const { businessId, phone, businessName, date, sendSms } = req.query;
-    const bid = businessId || 'demo-shop';
-    const biz = await Business.findOne({ id: bid });
-    const bname = biz?.name || businessName || 'My Duka';
-    const language = normalizeReportLanguage(req.query.language || biz?.reportLanguage);
-    const day = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
-    const period = day ? { start: day, end: day } : kenyaWeekRange();
-    const periodLabel = formatKenyaPeriod(period.start, period.end);
-
-    console.log(`[WEEKLY REPORT] Generating report for Business: ${bname} (${bid}) lang=${language} period=${periodLabel}`);
-
-    const [allEntries, stockLots] = await Promise.all([
-      Entry.find({ business_id: bid }),
-      Stock.find({ business_id: bid })
-    ]);
-    const entries = filterEntriesByKenyaRange(allEntries, period.start, period.end);
-
-    // Cash-basis totals keep the same formula as before. Item-level gross
-    // profit is computed from stock unit costs and sits beside them.
-    const report = buildWeeklyReport(entries, stockLots);
-    const localized = await assembleLocalizedReport({
-      report,
-      businessName: bname,
-      shopPhone: biz?.phone || '',
-      tillNumber: biz?.tillNumber || '',
-      periodLabel,
-      title: day ? (REPORT_LABELS[language]?.dailyTitle || REPORT_LABELS.en.dailyTitle) : undefined,
-      language,
-      translate: translatePhrasesWithGemini
+    const { businessId, businessName, date } = req.query;
+    const biz = await Business.findOne({ id: businessId || 'demo-shop' });
+    const built = await buildShopReport(biz || { id: businessId || 'demo-shop' }, {
+      date,
+      language: req.query.language,
+      businessName
     });
 
-    let smsStatus = null;
-    if (phone && (sendSms === '1' || sendSms === 'true' || (!day && sendSms !== '0'))) {
-      smsStatus = await sendSMS({ to: phone, message: localized.sms });
-    }
+    console.log(`[REPORT] ${built.bid} lang=${built.localized.language} period=${built.periodLabel}`);
 
     res.json({
       success: true,
-      report: localized.report,
-      labels: localized.labels,
-      language: localized.language,
-      languageFallback: localized.languageFallback,
-      period: { ...period, label: periodLabel },
-      shop: { name: bname, phone: biz?.phone || '', tillNumber: biz?.tillNumber || '' },
-      smsStatus
+      report: built.localized.report,
+      labels: built.localized.labels,
+      language: built.localized.language,
+      languageFallback: built.localized.languageFallback,
+      period: { ...built.period, label: built.periodLabel },
+      shop: { name: built.bname, phone: biz?.phone || '', tillNumber: biz?.tillNumber || '' }
     });
   } catch (error) {
     console.error("Weekly report endpoint error:", error);
@@ -543,62 +533,63 @@ app.get('/api/reports/weekly', async (req, res) => {
   }
 });
 
-// 6b. Schedule a Mock Daily Report SMS for 60 seconds later
-app.post('/api/reports/daily/schedule-test', async (req, res) => {
+// 6a. Owner taps "Send to my phone". Logged-in only, always to the phone
+// saved on the shop, and rate-limited so a stuck button cannot burn credit.
+app.post('/api/business/:id/report-sms', requireOwnBusiness, async (req, res) => {
   try {
-    const { phone = '0743177132', businessName = 'My Duka' } = req.body || {};
+    const biz = await Business.findOne({ id: req.params.id });
+    if (!biz) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    if (!rateLimit(`report-sms:${biz.id}`, { max: 3, windowMs: 60 * 60_000 })) {
+      return res.status(429).json({ error: 'You can send the till slip by SMS 3 times an hour. Try again later.' });
+    }
 
-    const mockReport = {
-      revenue: 12500,
-      cost_of_goods: 7300,
-      other_expenses: 1200,
-      mpesa_fees: 50,
-      net_profit: 3950,
-      outstanding_credit: 800
-    };
-
-    const localized = await assembleLocalizedReport({
-      report: {
-        ...mockReport,
-        gross_profit: 5200,
-        gross_margin: 42,
-        items_missing_cost: 0,
-        item_profits: [
-          { item: 'Loaves', gross_profit: 3200, margin: 48, cost_unknown: false },
-          { item: 'Sugar', gross_profit: 2000, margin: 35, cost_unknown: false }
-        ]
-      },
-      businessName,
-      language: 'en',
-      title: 'BiasharaBot Daily Report'
-    });
-    const message = localized.sms;
-
-    const jobId = `daily_report_${Date.now()}`;
-    const delayMs = 60_000;
-
-    setTimeout(async () => {
-      try {
-        console.log(`[SCHEDULED SMS] Sending job ${jobId} to ${phone}`);
-        const result = await sendSMS({ to: phone, message });
-        console.log(`[SCHEDULED SMS] Job ${jobId} completed:`, result);
-      } catch (error) {
-        console.error(`[SCHEDULED SMS] Job ${jobId} failed:`, error);
-      }
-    }, delayMs);
+    const result = await sendShopReportSms(biz, { trigger: 'manual', date: req.body?.date });
+    if (result.outcome !== 'sent') {
+      const status = result.reason === 'no_phone' || result.sms?.code === 'invalid_phone' ? 400 : 502;
+      return res.status(status).json({
+        success: false,
+        error: result.reason === 'no_phone'
+          ? 'This shop has no phone number saved'
+          : result.sms?.error || 'SMS could not be sent',
+        code: result.sms?.code || result.reason
+      });
+    }
 
     res.json({
       success: true,
-      scheduled: true,
-      jobId,
-      sendInSeconds: 60,
-      phone,
-      messagePreview: message
+      mock: Boolean(result.sms.mock),
+      to: result.sms.to,
+      parts: result.sms.parts,
+      deliveryId: result.delivery._id
     });
   } catch (error) {
-    console.error('Daily schedule test endpoint error:', error);
-    res.status(500).json({ error: 'Failed to schedule daily report SMS', details: error.message });
+    console.error('Report SMS endpoint error:', error);
+    res.status(500).json({ error: 'Failed to send the till slip SMS' });
   }
+});
+
+// 6b. Scheduled weekly till slips, for an external cron (cron-job.org, Render
+// Cron Job with curl, GitHub Actions…). Protected by CRON_SECRET. Answers
+// straight away and runs in the background so a slow run cannot time the
+// caller out; overlapping or repeated calls are harmless.
+app.post('/api/jobs/weekly-reports', (req, res) => {
+  const expected = process.env.CRON_SECRET || '';
+  if (!expected) {
+    return res.status(503).json({ error: 'CRON_SECRET is not configured on the server' });
+  }
+  const supplied = String(req.get('x-cron-secret') || '');
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'Invalid cron secret' });
+  }
+
+  runWeeklyReportJob().catch((error) => {
+    console.error('[WEEKLY JOB] Run failed:', error?.message || error);
+  });
+  res.status(202).json({ accepted: true });
 });
 
 // 7. Verify Admin Password Endpoint
@@ -830,8 +821,11 @@ app.get('/api/compliance', async (req, res) => {
       message: phraseCompliance(labels, row.titleKey, row.vars)
     }));
 
-    let notices = { sent: [], skipped: [] };
-    if (req.query.notify === '1') {
+    // Sending compliance SMS costs credit, so only the logged-in owner of
+    // this shop can trigger it. Anyone else just gets the checklist.
+    let notices = { sent: [], skipped: [], failed: [] };
+    const session = readSession(req.headers.authorization);
+    if (req.query.notify === '1' && session?.businessId === business.id) {
       notices = await dispatchComplianceNotices({
         business: toPublicBusiness(business),
         evaluation,
@@ -979,21 +973,18 @@ app.post('/api/reminders/run', async (req, res) => {
   }
 });
 
-const REMINDER_TICK_MS = 6 * 60 * 60 * 1000;
-
-function scheduleCreditReminders() {
-  const kick = () => {
-    runCreditReminders().catch((error) => {
-      console.error('[CREDIT REMINDER] sweep failed:', error.message || error);
-    });
-  };
-  setTimeout(kick, 45 * 1000);
-  setInterval(kick, REMINDER_TICK_MS);
-}
-
 // Start Server
 app.listen(PORT, () => {
   console.log(`BiasharaBot Server running on http://localhost:${PORT}`);
-  scheduleCreditReminders();
+  // node-cron runs the weekly till slip and the credit-reminder sweep; see
+  // scheduler.js for the schedules and the demo settings.
+  startSmsScheduler();
+  // A server that slept through a reminder tick catches up shortly after boot.
+  // Reminders are spaced three days apart per credit, so this cannot double-send.
+  setTimeout(() => {
+    runCreditReminders().catch((error) => {
+      console.error('[CREDIT REMINDER] sweep failed:', error.message || error);
+    });
+  }, 45 * 1000);
 });
 // Nodemon trigger change

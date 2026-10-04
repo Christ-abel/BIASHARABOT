@@ -1738,3 +1738,16 @@ header p {
 .compliance-triggers {
   margin-top: 12px;
 }
+
+.report-sms-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.report-sms-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-gray-dark);
+}

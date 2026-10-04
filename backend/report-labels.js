@@ -16,6 +16,7 @@ export const REPORT_LABELS = {
     weeklySubtitle: 'WEEKLY REPORT',
     dailySubtitle: 'DAILY REPORT',
     productsSold: 'PRODUCTS SOLD',
+    moreItems: '+{count} more item(s) in the app',
     period: 'Period',
     date: 'Date',
     phone: 'Phone',
@@ -55,6 +56,7 @@ export const REPORT_LABELS = {
     weeklySubtitle: 'RIPOTI YA WIKI',
     dailySubtitle: 'RIPOTI YA SIKU',
     productsSold: 'BIDHAA ZILIZOUZWA',
+    moreItems: '+bidhaa {count} zaidi kwenye app',
     period: 'Kipindi',
     date: 'Tarehe',
     phone: 'Simu',
@@ -137,7 +139,8 @@ export const COMPLIANCE_LABELS = {
     thresholdTot: 'Your turnover has entered the Turnover Tax band (above KSh {min}).',
     thresholdVat: 'Your turnover has reached the VAT registration threshold (KSh {threshold}).',
     deadlineSms: 'BiasharaBot: {title} — due {deadline}. {hint}',
-    newObligationSms: 'BiasharaBot: {title} now applies to {shop}. {hint}'
+    newObligationSms: 'BiasharaBot: {title} now applies to {shop}. {hint}',
+    thresholdSms: 'BiasharaBot ({shop}): {title} Check the tax checklist in the app.'
   },
   sw: {
     heading: 'Uzingatiaji wa kodi na biashara',
@@ -186,7 +189,8 @@ export const COMPLIANCE_LABELS = {
     thresholdTot: 'Mauzo yako yameingia kwenye kiwango cha TOT (juu ya KSh {min}).',
     thresholdVat: 'Mauzo yako yamefika kizingiti cha usajili wa VAT (KSh {threshold}).',
     deadlineSms: 'BiasharaBot: {title} — tarehe {deadline}. {hint}',
-    newObligationSms: 'BiasharaBot: {title} sasa inahusu {shop}. {hint}'
+    newObligationSms: 'BiasharaBot: {title} sasa inahusu {shop}. {hint}',
+    thresholdSms: 'BiasharaBot ({shop}): {title} Angalia orodha ya kodi kwenye app.'
   }
 };
 
